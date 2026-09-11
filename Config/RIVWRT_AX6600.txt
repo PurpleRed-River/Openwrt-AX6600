@@ -1,0 +1,107 @@
+# =============================================
+# RivWRT AX6600 最终定制配置
+#
+# 基于：PurpleRed-River/Openwrt-AX6600
+# 上游来源：ones20250/Openwrt-AX6600
+#
+# 设备：JDCloud RE-CS-02（AX6600 雅典娜）
+# 平台：Qualcomm IPQ6010 / qualcommax-ipq60xx
+#
+# 说明：
+# 本配置继承原项目硬件适配，不替换 NSS、无线和镜像生成逻辑。
+# =============================================
+
+# -----------------
+# 网络基础
+# -----------------
+
+# 防火墙
+firewall4
+nftables
+
+# IPv6 支持
+ipv6
+odhcp6c
+odhcpd-ipv6only
+
+# -----------------
+# 硬件加速
+# -----------------
+
+# Qualcomm NSS 硬件加速
+qca-nss-drv
+qca-nss-ecm
+
+# -----------------
+# 无线
+# -----------------
+
+# ath11k / QCA Wireless firmware
+firmware-qca-wireless
+
+# WiFi 默认建议：
+# 2.4G  CH11  20MHz
+# 5G-1   CH44  160MHz
+# 5G-2   CH149 80MHz
+#
+# 地区：US
+# 加密：WPA2-PSK / CCMP
+
+# -----------------
+# 代理
+# -----------------
+
+# 仅使用 dae
+# 节点由用户自行导入
+# 不集成多套代理框架
+
+dae
+
+# -----------------
+# DNS 分流
+# -----------------
+
+# 国内外分流及污染处理
+# 规则来源：geosite / geoip
+
+mosdns
+smartdns
+
+# -----------------
+# LuCI 扩展
+# -----------------
+
+# Aurora 主题
+luci-theme-aurora
+
+# 雅典娜 LED 控制
+JDC-AX6600-Athena-LED-Controller
+
+# 行为统计
+luci-app-bandix-plus
+
+# 网络唤醒
+wolplus
+
+# -----------------
+# 容器环境
+# -----------------
+
+# Podman 环境支持
+# 默认不自动启动用户容器
+podman
+podman-compose
+
+# -----------------
+# 默认配置
+# -----------------
+
+# 固件名称
+WRT_NAME=RivWRT
+
+# 默认无线
+WRT_SSID=RivWRT
+WRT_WORD=1qaz!QAZ
+
+# 默认管理地址
+WRT_IP=192.168.100.1
