@@ -9,6 +9,12 @@
 # 平台：Qualcomm IPQ6010 / qualcommax-ipq60xx
 # 适配分区：12M 内核 + 2G rootfs（chenxin527/uboot-qsdk12.5-build）
 # =============================================
+# BPF 工具链：dae 的 eBPF 代码用宿主 clang 编译（需 clang>=12，
+# GitHub runner 预装满足）。不启用则 bpf.mk 报 LLVM 版本过旧直接失败
+# =============================================
+CONFIG_BPF_TOOLCHAIN_HOST=y
+
+# =============================================
 
 # -----------------
 # LED 点阵屏控制
