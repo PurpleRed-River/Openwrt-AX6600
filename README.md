@@ -14,7 +14,7 @@
 | 组件 | 来源仓库 | 说明 |
 |------|----------|------|
 | 🌃 aurora 主题 | [eamonxg/luci-theme-aurora](https://github.com/eamonxg/luci-theme-aurora) | Vite + Tailwind 现代界面，编译期设为默认主题 |
-| 💡 Athena LED | [unraveloop/JDC-AX6600-Athena-LED-Controller](https://github.com/unraveloop/JDC-AX6600-Athena-LED-Controller) | 点阵屏控制器（网速/天气/农历/MQTT），替换源码树内旧版 |
+| 💡 Athena LED | 上游树内 `luci-app-athena-led`（ones20250 官方同款） | 点阵屏控制器（网速/天气/农历），自带预编译二进制零下载 |
 | 📊 bandix-plus | [timsaya/openwrt-bandix-plus](https://github.com/timsaya/openwrt-bandix-plus) + [luci-app-bandix-plus](https://github.com/timsaya/luci-app-bandix-plus) | 设备级流量统计（eBPF 旁路观察，见下方使用注意） |
 | 🚀 daede 代理 | [kenzok8/openwrt-daede](https://github.com/kenzok8/openwrt-daede) | dae eBPF 透明代理内核 + daed + luci-app-daede 统一管理界面 |
 

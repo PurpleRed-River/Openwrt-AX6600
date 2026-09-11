@@ -85,19 +85,17 @@ UPDATE_PACKAGE() {
 #UPDATE_PACKAGE "nikki" "nikkinikki-org/OpenWrt-nikki" "main"
 # =========================================================
 # RivWRT 组件注入（基于上游纯净版基座的定制组件，无条件拉取）
-# 顺序：树内旧 LED 清理 → 主题 → LED → bandix → daede
+# 顺序：主题 → LED → bandix → daede
 # =========================================================
-
-# RivWRT：删除源码树内旧版雅典娜 LED 组件（athena-led-control 等）。
-# UPDATE_PACKAGE 只清理 feeds 不清树内 package/，须先删避免新旧同名共存。
-find ./ -maxdepth 2 -type d -iname "*athena*" -exec rm -rf {} + 2>/dev/null || true
 
 # RivWRT：LuCI 主题（eamonxg 版 aurora，自带 uci-defaults 首次启动自动激活）
 UPDATE_PACKAGE "aurora" "eamonxg/luci-theme-aurora" "master"
 
-# RivWRT：LED 点阵屏控制器（pkg 模式按 *athena-led* 提取
-# athena-led 核心驱动与 luci-app-athena-led 界面两个子包，跳过 docs/tools）
-UPDATE_PACKAGE "athena-led" "unraveloop/JDC-AX6600-Athena-LED-Controller" "main" "pkg"
+# RivWRT：LED 点阵屏控制器 —— 使用上游树内官方版
+# （package/emortal/luci-app-athena-led，ones20250 官方固件同款，自带预编译二进制零下载）。
+# 注：unraveloop 增强版 release 资产（athena-led-*-v2.5.0.tar.gz）已被上游删除，
+# 下载 404 无法构建，故回退树内版；其核心同为 haipengno1/athena-led 集成。
+# 恢复资产后可换回：UPDATE_PACKAGE "athena-led" "unraveloop/JDC-AX6600-Athena-LED-Controller" "main" "pkg"
 
 # RivWRT：bandix-plus 流量统计（后端 + LuCI 前端；eBPF 旁路观察，不碰转发路径）
 UPDATE_PACKAGE "bandix-plus" "timsaya/openwrt-bandix-plus" "main" "pkg"

@@ -20,7 +20,8 @@
 ### 组件（Scripts/Packages.sh RivWRT 注入块）
 
 - aurora 主题（eamonxg 版）+ 编译期默认主题替换（Settings.sh）
-- Athena LED 点阵屏控制（unraveloop 版，pkg 模式提取两子包；树内旧版 athena-led-control 先删后装）
+- Athena LED 点阵屏控制：回退上游树内官方版 `luci-app-athena-led`
+  （ones20250 同款，预编译二进制零下载）；unraveloop 增强版 release 资产已 404 无法构建
 - bandix-plus 流量统计（后端 + LuCI 前端，eBPF 旁路观察定位）
 - daede 透明代理（dae + daed + luci-app-daede 一体包，pkg 模式提取三子包）
 

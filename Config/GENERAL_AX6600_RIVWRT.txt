@@ -12,11 +12,10 @@
 
 # -----------------
 # LED 点阵屏控制
-# 来源：unraveloop/JDC-AX6600-Athena-LED-Controller
-# 树内旧版 athena-led-control 已在 Packages.sh 中删除，此处显式关闭兜底
+# 使用上游树内官方版 package/emortal/luci-app-athena-led（ones20250 同款，
+# 自带预编译二进制零下载）；unraveloop 增强版 release 资产已 404 故不采用
 # -----------------
 CONFIG_PACKAGE_luci-app-athena-led=y
-CONFIG_PACKAGE_athena-led-control=n
 
 # -----------------
 # LuCI 主题
