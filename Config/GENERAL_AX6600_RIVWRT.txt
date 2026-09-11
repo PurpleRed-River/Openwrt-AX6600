@@ -9,9 +9,12 @@
 # 平台：Qualcomm IPQ6010 / qualcommax-ipq60xx
 # 适配分区：12M 内核 + 2G rootfs（chenxin527/uboot-qsdk12.5-build）
 # =============================================
-# BPF 工具链：dae 的 eBPF 代码用宿主 clang 编译（需 clang>=12，
-# GitHub runner 预装满足）。不启用则 bpf.mk 报 LLVM 版本过旧直接失败
+# BPF 工具链：dae 的 eBPF 代码用宿主 clang 编译（需 clang>=12，runner 预装满足）。
+# 注意：BPF_TOOLCHAIN choice 的可见性挂在 "if DEVEL" 上，基座 CONFIG_DEVEL=n
+# 会导致 HOST 行被 kconfig 静默丢弃（落到空选择 → /invalid/clang 报错），
+# 故必须同时开启 DEVEL；DEVEL 仅控制开发者菜单可见性，无实质副作用
 # =============================================
+CONFIG_DEVEL=y
 CONFIG_BPF_TOOLCHAIN_HOST=y
 
 # =============================================

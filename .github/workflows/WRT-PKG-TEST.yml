@@ -78,7 +78,7 @@ jobs:
           clang --version | head -1
           echo "=== 关键 config 符号检查 ==="
           FAILED=0
-          for KEY in CONFIG_BPF_TOOLCHAIN_HOST CONFIG_PACKAGE_dae CONFIG_PACKAGE_daed \
+          for KEY in CONFIG_DEVEL CONFIG_BPF_TOOLCHAIN_HOST CONFIG_PACKAGE_dae CONFIG_PACKAGE_daed \
                      CONFIG_PACKAGE_luci-app-daede CONFIG_PACKAGE_vmlinux-btf \
                      CONFIG_PACKAGE_bandix-plus CONFIG_PACKAGE_luci-app-bandix-plus \
                      CONFIG_PACKAGE_luci-app-athena-led CONFIG_PACKAGE_luci-theme-aurora \
