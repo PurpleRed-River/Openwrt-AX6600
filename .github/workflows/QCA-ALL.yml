@@ -25,12 +25,15 @@ permissions: write-all
 #CI任务
 jobs:
   config:
-    name: ${{matrix.CONFIG}}-${{matrix.PROFILE}}
+    name: ${{matrix.CONFIG}}
     strategy:
       fail-fast: false
       matrix:
-        CONFIG: [IPQ60XX-WIFI-YES, RIVWRT_AX6600]
-        PROFILE: [PURE, PLUS]
+        include:
+          - CONFIG: RIVWRT_AX6600
+            PROFILE: RIVWRT
+          - CONFIG: IPQ60XX-WIFI-YES
+            PROFILE: BASE
         SOURCE: [ones20250/immortalwrt_ipq]
         BRANCH: [main]
 
@@ -47,7 +50,6 @@ jobs:
       WRT_WORD: 1qaz!QAZ
       WRT_IP: 192.168.100.1
 
-      # 默认密码提示
       WRT_PW: 无
 
       WRT_REPO: https://github.com/${{matrix.SOURCE}}.git
