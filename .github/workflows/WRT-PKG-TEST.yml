@@ -96,12 +96,14 @@ jobs:
             exit 1
           fi
 
-      - name: Build Host Tools
+      - name: Build Tools and Toolchain
         run: |
           cd ./wrt/
-          # 直接 make package/... 不会触发 world 目标的 tools 阶段，
-          # 而 staging_dir/host/bin（sed/openssl 等）由 tools/compile 产出，缺它 host 包必挂
+          # 直接 make package/... 不触发 world 目标的前置阶段：
+          # tools/compile 产出 staging_dir/host/bin（sed/openssl 等），
+          # toolchain/compile 产出 aarch64 交叉工具链（libgcc 打包等依赖），缺一必挂
           make tools/compile -j$(nproc)
+          make toolchain/compile -j$(nproc)
 
       - name: Build Test Packages
         run: |
