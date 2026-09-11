@@ -99,11 +99,11 @@ jobs:
       - name: Build Tools and Toolchain
         run: |
           cd ./wrt/
-          # 直接 make package/... 不触发 world 目标的前置阶段：
-          # tools/compile 产出 staging_dir/host/bin（sed/openssl 等），
-          # toolchain/compile 产出 aarch64 交叉工具链（libgcc 打包等依赖），缺一必挂
+          # tools: host 工具（sed/openssl）；toolchain: aarch64 交叉编译器；
+          # target: 主内核构建（bpf-headers prepare 要读主内核 .config 保持配置一致）
           make tools/compile -j$(nproc)
           make toolchain/compile -j$(nproc)
+          make target/compile -j$(nproc)
 
       - name: Build Test Packages
         run: |
