@@ -1,0 +1,71 @@
+# =============================================
+# RivWRT 增量配置
+#
+# 叠加在 Config/GENERAL_AX6600.txt（通用基座）之上，
+# 由 WRT-CORE.yml 按 GENERAL_AX6600_${PROFILE}.txt 规则自动拼接，
+# 后写的条目按 kconfig 规则覆盖基座同名项。
+#
+# 设备：JDCloud RE-CS-02（京东云 AX6600 雅典娜）
+# 平台：Qualcomm IPQ6010 / qualcommax-ipq60xx
+# 适配分区：12M 内核 + 2G rootfs（chenxin527/uboot-qsdk12.5-build）
+# =============================================
+
+# -----------------
+# LED 点阵屏控制
+# 来源：unraveloop/JDC-AX6600-Athena-LED-Controller
+# 树内旧版 athena-led-control 已在 Packages.sh 中删除，此处显式关闭兜底
+# -----------------
+CONFIG_PACKAGE_luci-app-athena-led=y
+CONFIG_PACKAGE_athena-led-control=n
+
+# -----------------
+# LuCI 主题
+# 来源：eamonxg/luci-theme-aurora（Vite + Tailwind 现代 UI，深浅色）
+# 默认主题替换由 Settings.sh 完成（luci collection 依赖 bootstrap → aurora）
+# -----------------
+CONFIG_PACKAGE_luci-theme-aurora=y
+
+# -----------------
+# 流量行为统计（bandix-plus：eBPF 旁路观察）
+# 定位：纯观察，不参与转发路径，不影响 NSS 加速性能。
+# 注意：被 NSS 硬件加速的直连流量不进内核统计路径，bandix 数字会偏低；
+# 需要看精确报表时在 LuCI 停用 NSS ecm（流量回落内核即数全），看完再开。
+# 依赖：bandix-plus（后端，同仓库族 timsaya/openwrt-bandix-plus）+ eBPF 内核
+# -----------------
+CONFIG_PACKAGE_bandix-plus=y
+CONFIG_PACKAGE_luci-app-bandix-plus=y
+
+# -----------------
+# 透明代理（kenzok8/openwrt-daede：dae eBPF 内核 + luci-app-daede 管理界面）
+# 分工：dae 规则判定代理的流量由 dae 接管（不经 NSS）；直连流量满血 NSS 加速。
+# DNS 内外网分流/防污染由 dae 内置 DNS 模块承担（geosite/geoip），
+# dnsmasq 仅保留 DHCP 与内网 split-horizon 职责，不装 mosdns/smartdns。
+# luci-app-daede 默认经 kconfig choice 拉入 daed 后端；dae/daed 同一套 UCI 可切换。
+# -----------------
+CONFIG_PACKAGE_dae=y
+CONFIG_PACKAGE_luci-app-daede=y
+
+# -----------------
+# Podman 容器环境（连带 veth 内核支持，覆盖基座 kmod-veth=n）
+# 只装环境，不默认跑任何容器；容器数据建议落 eMMC 独立分区
+# -----------------
+CONFIG_PACKAGE_podman=y
+CONFIG_PACKAGE_kmod-veth=y
+
+# -----------------
+# IPv6（基座 ImmortalWrt 默认已含，显式声明保证开启）
+# -----------------
+CONFIG_PACKAGE_odhcp6c=y
+CONFIG_PACKAGE_odhcpd-ipv6only=y
+
+# -----------------
+# fullcone NAT（游戏机/P2P 更友好的 NAT 行为，nftables 实现）
+# -----------------
+CONFIG_PACKAGE_kmod-nft-fullcone=y
+
+# -----------------
+# 接口级流量总量统计（基于网卡计数器，NSS 加速流量照数，永远准确；
+# 与 bandix 互补：vnstat 看总量趋势，bandix 看设备明细）
+# -----------------
+CONFIG_PACKAGE_vnstat=y
+CONFIG_PACKAGE_luci-app-vnstat=y

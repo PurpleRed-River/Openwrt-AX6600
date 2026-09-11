@@ -17,9 +17,11 @@ apply_sed_to_matches() {
 #移除luci-app-attendedsysupgrade
 apply_sed_to_matches "./feeds/luci/collections/" "Makefile" "/attendedsysupgrade/d"
 
-#修改默认主题
-#sed -i "s/luci-theme-bootstrap/luci-theme-$WRT_THEME/g" $(find ./feeds/luci/collections/ -type f -name "Makefile")
-#sed -i "s/luci-theme-.*$/luci-theme-bootstrap/g" $(find ./feeds/luci/collections/ -type f -name "Makefile")
+#修改默认主题（RivWRT：aurora；WRT_THEME 为空或 bootstrap 时不替换）
+if [ -n "$WRT_THEME" ] && [ "$WRT_THEME" != "bootstrap" ]; then
+	sed -i "s/luci-theme-bootstrap/luci-theme-$WRT_THEME/g" $(find ./feeds/luci/collections/ -type f -name "Makefile")
+	echo "CONFIG_PACKAGE_luci-theme-$WRT_THEME=y" >> ./.config
+fi
 
 #修改immortalwrt.lan关联IP
 apply_sed_to_matches "./feeds/luci/modules/luci-mod-system/" "flash.js" "s/192\\.168\\.[0-9]*\\.[0-9]*/$WRT_IP/g"
@@ -93,3 +95,15 @@ else
         echo "Memory patch: current value ($CURRENT_VAL) is sufficient, skipped."
     fi
 fi
+
+# =========================================================
+# RivWRT：banner 标识（简短一行，注明上游来源与定制身份）
+# =========================================================
+for BANNER in $(find ./package ./target -type f -path "*base-files*/etc/banner" 2>/dev/null); do
+	if ! grep -q "RivWRT" "$BANNER"; then
+		cat >> "$BANNER" <<'RIVWRT_BANNER'
+
+RivWRT (based on ones20250/Openwrt-AX6600) | aurora / athena-led / bandix-plus / daede
+RIVWRT_BANNER
+	fi
+done

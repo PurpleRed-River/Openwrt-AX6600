@@ -61,17 +61,29 @@ UPDATE_PACKAGE() {
 #UPDATE_PACKAGE "homeproxy" "ones20250/homeproxy" "master"
 #UPDATE_PACKAGE "momo" "nikkinikki-org/OpenWrt-momo" "main"
 #UPDATE_PACKAGE "nikki" "nikkinikki-org/OpenWrt-nikki" "main"
-if [[ "${WRT_PROFILE^^}" == "PLUS" ]]; then
-	# LuCI 入口随 "pkg" 通配一并提取，依赖包（xray、sing-box、geodata 等）
-	# 由 passwall_packages feed 提供，避免同名包双重定义。
-	UPDATE_PACKAGE "openclash" "vernesong/OpenClash" "master" "pkg"
-	#一代 PassWall 已由 PassWall2 取代，fork 者如需可取消注释，并同步启用 Config/GENERAL_AX6600_PLUS.txt 中对应配置段
-	#UPDATE_PACKAGE "passwall" "Openwrt-Passwall/openwrt-passwall" "main" "pkg"
-	UPDATE_PACKAGE "passwall2" "Openwrt-Passwall/openwrt-passwall2" "main" "pkg"
-	# 分区扩容与网络唤醒：源码仅 PLUS 版拉取，PURE 中同名 =y 配置因无源码自动失效
-	UPDATE_PACKAGE "partexp" "sirpdboy/luci-app-partexp" "main"
-	UPDATE_PACKAGE "viking" "ones20250/packages" "main" "" "luci-app-timewol luci-app-wolplus"
-fi
+# =========================================================
+# RivWRT 组件注入（基于上游纯净版基座的定制组件，无条件拉取）
+# 顺序：树内旧 LED 清理 → 主题 → LED → bandix → daede
+# =========================================================
+
+# RivWRT：删除源码树内旧版雅典娜 LED 组件（athena-led-control 等）。
+# UPDATE_PACKAGE 只清理 feeds 不清树内 package/，须先删避免新旧同名共存。
+find ./ -maxdepth 2 -type d -iname "*athena*" -exec rm -rf {} + 2>/dev/null || true
+
+# RivWRT：LuCI 主题（eamonxg 版 aurora，自带 uci-defaults 首次启动自动激活）
+UPDATE_PACKAGE "aurora" "eamonxg/luci-theme-aurora" "master"
+
+# RivWRT：LED 点阵屏控制器（pkg 模式按 *athena-led* 提取
+# athena-led 核心驱动与 luci-app-athena-led 界面两个子包，跳过 docs/tools）
+UPDATE_PACKAGE "athena-led" "unraveloop/JDC-AX6600-Athena-LED-Controller" "main" "pkg"
+
+# RivWRT：bandix-plus 流量统计（后端 + LuCI 前端；eBPF 旁路观察，不碰转发路径）
+UPDATE_PACKAGE "bandix-plus" "timsaya/openwrt-bandix-plus" "main" "pkg"
+UPDATE_PACKAGE "luci-app-bandix-plus" "timsaya/luci-app-bandix-plus" "main" "pkg"
+
+# RivWRT：daede 透明代理一体包（dae eBPF 内核 + luci-app-daede；pkg 模式按
+# *dae* 恰好提取 dae/、daed/、luci-app-daede/ 三个包目录，跳过 ci/scripts/vmlinux-btf）
+UPDATE_PACKAGE "dae" "kenzok8/openwrt-daede" "main" "pkg"
 
 #UPDATE_PACKAGE "mosdns" "sbwml/luci-app-mosdns" "v5" "" "v2dat"
 

@@ -1,68 +1,46 @@
 # RivWRT AX6600 更新记录
 
-## Initial RivWRT Release Plan
+## 2026-09-11 · 基于 ones20250 纯净版重建（RivWRT v1）
 
-基础仓库：
+本次为全量重写：上游编译机制原样保留，定制全部收敛到 RIVWRT 单 profile。
 
-- PurpleRed-River/Openwrt-AX6600
+### 修复
 
-上游来源：
+- `QCA-ALL.yml`：还原上游骨架并改为单 matrix（`PROFILE: [RIVWRT]`）。
+  此前 fork 的 `PROFILE: RIVWRT` 未同步 `WRT-CORE.yml` 白名单，触发 `exit 1`，一跑即失败。
+- 移除 GPT 残留的格式错误配置（裸包名列表，不符合 `.config` 片段的 `CONFIG_*` 格式）。
 
-- ones20250/Openwrt-AX6600
+### 工作流
 
-## 架构调整
+- `WRT-CORE.yml`：profile 白名单加入 `RIVWRT`；固件命名改为
+  `RivWRT-时间-ipq60xx-jdcloud_re-cs-02-*.bin`；Release 文案更新为 RivWRT 组件清单。
+- `WRT-TEST.yml`：PROFILE 选项与默认值改为 RIVWRT，默认参数与正式编译一致。
+- 默认值：主机名/SSID `RivWRT`、WiFi 密码 `1qaz!QAZ`、管理地址 `192.168.100.1`、默认主题 aurora。
 
-- 固定 RivWRT AX6600 为主要发布方案
-- 保留原项目 GitHub Actions 云编译框架
-- 保留 JDCloud RE-CS-02（雅典娜 AX6600）硬件适配
-- 保留 qualcommax/ipq60xx 镜像生成方式
-- 保留 NSS 硬件加速框架
-- 保留 ath11k/QCA 无线支持
+### 组件（Scripts/Packages.sh RivWRT 注入块）
 
-## 网络功能
+- aurora 主题（eamonxg 版）+ 编译期默认主题替换（Settings.sh）
+- Athena LED 点阵屏控制（unraveloop 版，pkg 模式提取两子包；树内旧版 athena-led-control 先删后装）
+- bandix-plus 流量统计（后端 + LuCI 前端，eBPF 旁路观察定位）
+- daede 透明代理（dae + daed + luci-app-daede 一体包，pkg 模式提取三子包）
 
-- 增强 IPv6 支持
-- 使用 firewall4 + nftables 防火墙方案
-- 集成 dae 代理框架
-- DNS 分流规划：mosdns + smartdns
-- 规则来源规划：geosite / geoip
+### 配置（Config/GENERAL_AX6600_RIVWRT.txt 新增）
 
-## LuCI 与服务组件
+- 显式开启：dae / luci-app-daede / bandix-plus 双包 / luci-theme-aurora / luci-app-athena-led
+- Podman 容器环境（kmod-veth 覆盖基座 =n）、IPv6（odhcp6c / odhcpd-ipv6only）
+- kmod-nft-fullcone（fullcone NAT）、vnstat（接口级总量统计，NSS 流量照数）
+- 关闭：mosdns / smartdns（DNS 分流由 dae 内置模块承担）、树内旧版 LED 包
 
-- 集成 Aurora LuCI 主题
-- 集成 Athena LED 控制
-- 集成 Bandix Plus 流量统计
-- 集成 WOL Plus 网络唤醒
-- 增加 Podman 容器环境规划
+### 定位说明
 
-## 无线优化记录
+- NSS 优先：直连流量满血硬件加速；dae 代理流量内核态接管，二者天然分工。
+- bandix 纯观察：不影响转发性能；精确报表需临时停用 NSS ecm（README 有操作说明）。
+- Config/GENERAL_AX6600_PLUS.txt 与 GPT 版 RIVWRT_AX6600.txt 已删除；Docs 三个半成品文档已删除，
+  保留上游原文《刷机救砖教程.md》。
 
-雅典娜三频默认建议：
+---
 
-- 2.4G：信道 11，20MHz
-- 5G-1：信道 44，160MHz
-- 5G-2：信道 149，80MHz
+## 上游历史（fork 自 ones20250/Openwrt-AX6600）
 
-通用：
-
-- 地区 US
-- 发射功率 24dBm
-- WPA2-PSK + CCMP
-
-## 刷机说明
-
-设备通过 U-Boot Web 刷入时：
-
-首次刷入：
-
-`qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-factory.bin`
-
-系统升级：
-
-`qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-sysupgrade.bin`
-
-## 存储规划
-
-设备 eMMC 剩余空间不在固件阶段自动重分区。
-
-Podman、容器镜像以及长期数据建议在刷机后根据实际需求手动规划独立存储空间。
+上游按 PURE（纯净）/ PLUS（预装 OpenClash、PassWall2、Docker 等）双版本发布，机制详见上游仓库。
+本仓库不再构建 PURE/PLUS，仅维护 RivWRT 定制版。
