@@ -7,6 +7,13 @@ UPDATE_PACKAGE() {
 	local PKG_BRANCH=$3
 	local PKG_SPECIAL=$4
 	local PKG_LIST=("$PKG_NAME" $5)  # 第5个参数为自定义名称列表
+	# pkg-exact 模式：删除与子目录提取均按第5参精确名匹配。
+	# 通配 *dae* 会误删 feeds 里 libdaemon / perl-http-daemon 等名字含 dae 的无关包。
+	local PKG_EXACT=0
+	if [[ "$PKG_SPECIAL" == "pkg-exact" ]]; then
+		PKG_EXACT=1
+		PKG_SPECIAL="pkg"
+	fi
 	local REPO_NAME=${PKG_REPO#*/}
 
 	echo " "
@@ -16,7 +23,11 @@ UPDATE_PACKAGE() {
 		# 查找匹配的目录
 		echo "Search directory: $NAME"
 		local FOUND_DIRS
-		FOUND_DIRS=$(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "*$NAME*" 2>/dev/null)
+		if [[ "$PKG_EXACT" == "1" ]]; then
+			FOUND_DIRS=$(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "$NAME" 2>/dev/null)
+		else
+			FOUND_DIRS=$(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "*$NAME*" 2>/dev/null)
+		fi
 
 		# 删除找到的目录
 		if [ -n "$FOUND_DIRS" ]; then
@@ -40,7 +51,14 @@ UPDATE_PACKAGE() {
 
 	# 处理克隆的仓库
 	if [[ "$PKG_SPECIAL" == "pkg" ]]; then
-		find "./$REPO_NAME"/*/ -maxdepth 3 -type d -iname "*$PKG_NAME*" -prune -exec cp -rf {} ./ \;
+		if [[ "$PKG_EXACT" == "1" ]]; then
+			# 按精确名提取仓库内的子目录包
+			for NAME in "${PKG_LIST[@]}"; do
+				[ -d "./$REPO_NAME/$NAME" ] && cp -rf "./$REPO_NAME/$NAME" ./
+			done
+		else
+			find "./$REPO_NAME"/*/ -maxdepth 3 -type d -iname "*$PKG_NAME*" -prune -exec cp -rf {} ./ \;
+		fi
 		rm -rf "./$REPO_NAME/"
 	elif [[ "$PKG_SPECIAL" == "name" ]]; then
 		mv -f "$REPO_NAME" "$PKG_NAME"
@@ -81,9 +99,10 @@ UPDATE_PACKAGE "athena-led" "unraveloop/JDC-AX6600-Athena-LED-Controller" "main"
 UPDATE_PACKAGE "bandix-plus" "timsaya/openwrt-bandix-plus" "main" "pkg"
 UPDATE_PACKAGE "luci-app-bandix-plus" "timsaya/luci-app-bandix-plus" "main" "pkg"
 
-# RivWRT：daede 透明代理一体包（dae eBPF 内核 + luci-app-daede；pkg 模式按
-# *dae* 恰好提取 dae/、daed/、luci-app-daede/ 三个包目录，跳过 ci/scripts/vmlinux-btf）
-UPDATE_PACKAGE "dae" "kenzok8/openwrt-daede" "main" "pkg"
+# RivWRT：daede 透明代理一体包。pkg-exact 按精确名提取 4 个子目录包：
+# dae（eBPF 内核）/ daed / luci-app-daede / vmlinux-btf（dae/daed 的 BTF 依赖包）；
+# 删除 feeds 同名旧包（dae/daed）同样走精确匹配，luci-app-dae/daed 不同名保留无碍。
+UPDATE_PACKAGE "dae" "kenzok8/openwrt-daede" "main" "pkg-exact" "dae daed luci-app-daede vmlinux-btf"
 
 #UPDATE_PACKAGE "mosdns" "sbwml/luci-app-mosdns" "v5" "" "v2dat"
 
