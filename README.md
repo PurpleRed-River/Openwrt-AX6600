@@ -1,7 +1,5 @@
 # RivWRT AX6600
 
-基于 `PurpleRed-River/Openwrt-AX6600`
-
 上游来源：`ones20250/Openwrt-AX6600`
 
 适配设备：
