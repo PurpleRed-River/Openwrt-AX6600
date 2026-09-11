@@ -96,6 +96,13 @@ jobs:
             exit 1
           fi
 
+      - name: Build Host Tools
+        run: |
+          cd ./wrt/
+          # 直接 make package/... 不会触发 world 目标的 tools 阶段，
+          # 而 staging_dir/host/bin（sed/openssl 等）由 tools/compile 产出，缺它 host 包必挂
+          make tools/compile -j$(nproc)
+
       - name: Build Test Packages
         run: |
           cd ./wrt/
