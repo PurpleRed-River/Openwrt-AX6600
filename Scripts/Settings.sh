@@ -107,3 +107,27 @@ RivWRT (based on ones20250/Openwrt-AX6600) | aurora / athena-led / bandix-plus /
 RIVWRT_BANNER
 	fi
 done
+
+# =========================================================
+# RivWRT：网口互换（首刷自动生效）
+# 默认布局：wan = 2.5G 口，lan1-4 = 千兆
+# 定制布局：2.5G 口(wan)并入 br-lan 做内网，原 lan1 改做 WAN
+# 用途：千兆宽带接原 LAN1 丝印口，2.5G 口留给内网高速互访
+# =========================================================
+UDIR="./package/base-files/files/etc/uci-defaults"
+mkdir -p "$UDIR"
+cat > "$UDIR/99-rivwrt-lan-wan-swap" <<'RIVWRT_SWAP'
+#!/bin/sh
+# 仅对京东云雅典娜 RE-CS-02 生效，其他设备跳过
+[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = "jdcloud,re-cs-02" ] || exit 0
+# br-lan：移出 lan1，加入 2.5G 口（设备名 wan）
+for DEV in 0 1 2 3 4; do
+	NAME=$(uci -q get network.@device[$DEV].name)
+	[ "$NAME" = "br-lan" ] && uci set network.@device[$DEV].ports='wan lan2 lan3 lan4'
+done
+# wan 接口：物理设备从 2.5G 口改为 lan1
+uci -q set network.wan.device='lan1'
+uci -q set network.wan6.device='lan1'
+uci commit network
+RIVWRT_SWAP
+chmod +x "$UDIR/99-rivwrt-lan-wan-swap"
