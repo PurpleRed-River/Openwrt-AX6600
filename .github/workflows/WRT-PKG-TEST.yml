@@ -1,0 +1,107 @@
+#CI项目：单包编译验证（不编全量固件，用于快速定位组件链路问题）
+name: WRT-PKG-TEST
+
+#CI计划
+on:
+  workflow_dispatch:
+    inputs:
+      PACKAGES:
+        description: '要验证编译的包目标（空格分隔，make 路径格式）'
+        default: 'package/kernel/bpf-headers/compile package/dae/compile package/daed/compile'
+        required: true
+        type: string
+
+#CI权限
+permissions: write-all
+
+#CI任务
+jobs:
+  pkg-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Projects
+        uses: actions/checkout@v4
+
+      - name: Initialization Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt -yqq update
+          sudo -E apt -yqq full-upgrade
+          sudo -E apt -yqq install dos2unix libfuse-dev libxml2 python3-setools python3-setuptools rsync clang
+          # rsync 供 bpf-headers 的 headers_install；clang 供 dae 的 eBPF 编译
+          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
+          sudo -E systemctl daemon-reload
+          sudo -E timedatectl set-timezone "Asia/Shanghai"
+          sudo mkdir -p /mnt/build_wrt
+          sudo chown $USER:$USER /mnt/build_wrt
+          sudo ln -s /mnt/build_wrt $GITHUB_WORKSPACE/wrt
+
+      - name: Clone Code
+        run: |
+          git clone --depth=1 --single-branch --branch main https://github.com/ones20250/immortalwrt_ipq.git ./wrt/
+          cd ./wrt/
+          # 移除国内镜像源（runner 直连官方源更快更稳）
+          PROJECT_MIRRORS_FILE="./scripts/projectsmirrors.json"
+          if [ -f "$PROJECT_MIRRORS_FILE" ]; then
+            sed -i '/.cn\//d; /tencent/d; /aliyun/d' "$PROJECT_MIRRORS_FILE"
+          fi
+
+      - name: Check Scripts
+        run: |
+          find ./ -maxdepth 3 -type f -iregex ".*\(txt\|sh\)$" -exec dos2unix {} \; -exec chmod +x {} \;
+
+      - name: Update Feeds
+        run: |
+          cd ./wrt/
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Custom Packages
+        run: |
+          cd ./wrt/package/
+          $GITHUB_WORKSPACE/Scripts/Packages.sh
+
+      - name: Custom Settings
+        run: |
+          cd ./wrt/
+          cat $GITHUB_WORKSPACE/Config/IPQ60XX-WIFI-YES.txt \
+              $GITHUB_WORKSPACE/Config/GENERAL_AX6600.txt \
+              $GITHUB_WORKSPACE/Config/GENERAL_AX6600_RIVWRT.txt >> .config
+          $GITHUB_WORKSPACE/Scripts/Settings.sh
+          make defconfig -j$(nproc)
+
+      - name: Verify Key Configs
+        run: |
+          cd ./wrt/
+          echo "=== clang 版本（需 >=12）==="
+          clang --version | head -1
+          echo "=== 关键 config 符号检查 ==="
+          FAILED=0
+          for KEY in CONFIG_BPF_TOOLCHAIN_HOST CONFIG_PACKAGE_dae CONFIG_PACKAGE_daed \
+                     CONFIG_PACKAGE_luci-app-daede CONFIG_PACKAGE_vmlinux-btf \
+                     CONFIG_PACKAGE_bandix-plus CONFIG_PACKAGE_luci-app-bandix-plus \
+                     CONFIG_PACKAGE_luci-app-athena-led CONFIG_PACKAGE_luci-theme-aurora \
+                     CONFIG_PACKAGE_luci-app-partexp CONFIG_PACKAGE_luci-app-wolultra \
+                     CONFIG_PACKAGE_podman CONFIG_PACKAGE_kmod-qca-nss-ecm; do
+            if grep -q "^$KEY=y" .config; then
+              echo "OK   $KEY=y"
+            else
+              echo "MISS $KEY （未收录！依赖不满足或包不存在）"
+              FAILED=1
+            fi
+          done
+          if [ "$FAILED" = "1" ]; then
+            echo "::error::关键 config 符号缺失，先修配置再编译"
+            exit 1
+          fi
+
+      - name: Build Test Packages
+        run: |
+          cd ./wrt/
+          make download -j$(nproc)
+          make ${{inputs.PACKAGES}} -j$(nproc) V=s || make ${{inputs.PACKAGES}} -j1 V=s
+
+      - name: Result
+        run: |
+          echo "✅ 指定包全部编译通过，可回 QCA-ALL 跑全量"
