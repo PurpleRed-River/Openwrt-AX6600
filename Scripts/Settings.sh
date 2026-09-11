@@ -131,3 +131,15 @@ uci -q set network.wan6.device='lan1'
 uci commit network
 RIVWRT_SWAP
 chmod +x "$UDIR/99-rivwrt-lan-wan-swap"
+
+# =========================================================
+# RivWRT：内核分区尺寸适配（匹配已刷 GPT 的 A 槽布局）
+# 实测分区：0:HLOS(p16)=12288KB，rootfs(p18)=2GiB（chenxin527 uboot 双分区）。
+# 上游树默认 KERNEL_SIZE=6144k（官方 B 槽尺寸），factory/sysupgrade 的
+# kernel 段须 pad 到 12288k 才与 GPT 对齐，否则 rootfs 起点错位无法启动
+# =========================================================
+IMG_MK="./target/linux/qualcommax/image/ipq60xx.mk"
+if [ -f "$IMG_MK" ]; then
+	sed -i "/Device\/jdcloud_re-cs-02/,/TARGET_DEVICES += jdcloud_re-cs-02/ s/KERNEL_SIZE := 6144k/KERNEL_SIZE := 12288k/" "$IMG_MK"
+	echo "RivWRT: KERNEL_SIZE -> 12288k (A槽 12MiB 内核分区)"
+fi

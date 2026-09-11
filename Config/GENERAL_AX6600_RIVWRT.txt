@@ -13,10 +13,10 @@
 # 注意：BPF_TOOLCHAIN choice 的可见性挂在 "if DEVEL" 上，基座 CONFIG_DEVEL=n
 # 会导致 HOST 行被 kconfig 静默丢弃（落到空选择 → /invalid/clang 报错），
 # 故必须同时开启 DEVEL；DEVEL 仅控制开发者菜单可见性，无实质副作用。
-# 决策：不开内核原生 BTF——上游树 KERNEL_SIZE=6144k（6MB 硬限，pad-to 超限编译失败），
-# 6.18 NSS 内核 + BTF 段很可能顶破；且 kenzok8 dae 组合的标准形态就是
-# 无 BTF 内核 + vmlinux-btf 包（pahole 已装，构建已修复）。
-# 内核 BTF 还会常驻占 ~2MB 运行内存，1G RAM 设备从省。
+# 内核 BTF：开启。已实测设备 GPT：A 槽 0:HLOS=12288KB(12MiB)+rootfs=2GiB，
+# KERNEL_SIZE 已在 Settings.sh 适配为 12288k，内核+BTF 段约 7-8MiB 余量充足。
+# 开启后 /sys/kernel/btf/vmlinux 原生可用，dae/bandix/未来 eBPF 工具全覆盖；
+# vmlinux-btf 独立包仍作为 dae 硬依赖编入兜底（dwarves/pahole 已装可构建）。
 # =============================================
 CONFIG_DEVEL=y
 CONFIG_BPF_TOOLCHAIN_HOST=y
