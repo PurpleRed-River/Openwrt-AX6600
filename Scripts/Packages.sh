@@ -51,15 +51,19 @@ UPDATE_PACKAGE() {
 
 	# 处理克隆的仓库
 	if [[ "$PKG_SPECIAL" == "pkg" ]]; then
+		# 先把仓库目录移到临时名再提取：若仓库名与包子目录同名
+		# （如 bandix 两仓 / partexp），cp 目标已存在会把包嵌套复制进自身再被整体删除
+		mv "./$REPO_NAME" "./.extract-tmp"
 		if [[ "$PKG_EXACT" == "1" ]]; then
-			# 先把仓库目录移到临时名再提取：若仓库名与包子目录同名
-			# （如 bandix 两仓），cp 目标已存在会把包嵌套复制进自身再被整体删除
-			mv "./$REPO_NAME" "./.extract-tmp"
+			# 按精确名提取仓库内的子目录包
 			for NAME in "${PKG_LIST[@]}"; do
 				[ -d "./.extract-tmp/$NAME" ] && cp -rf "./.extract-tmp/$NAME" ./ || true
 			done
-			rm -rf "./.extract-tmp"
+		else
+			# 按包名通配提取子目录包
+			find "./.extract-tmp"/*/ -maxdepth 3 -type d -iname "*$PKG_NAME*" -prune -exec cp -rf {} ./ \;
 		fi
+		rm -rf "./.extract-tmp"
 	elif [[ "$PKG_SPECIAL" == "name" ]]; then
 		mv -f "$REPO_NAME" "$PKG_NAME"
 	fi
@@ -109,6 +113,9 @@ UPDATE_PACKAGE "dae" "kenzok8/openwrt-daede" "main" "pkg-exact" "dae daed luci-a
 UPDATE_PACKAGE "wolultra" "ones20250/packages" "main" "pkg-exact" "luci-app-wolultra"
 
 #UPDATE_PACKAGE "mosdns" "sbwml/luci-app-mosdns" "v5" "" "v2dat"
+
+# RivWRT：分区扩容挂载插件（Web 界面一键格式化/扩容/挂载剩余存储）
+UPDATE_PACKAGE "partexp" "sirpdboy/luci-app-partexp" "main" "pkg"
 
 #UPDATE_PACKAGE "luci-app-tailscale" "asvow/luci-app-tailscale" "main"
 
