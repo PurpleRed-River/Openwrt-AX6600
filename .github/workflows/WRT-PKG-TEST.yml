@@ -28,8 +28,8 @@ jobs:
         run: |
           sudo -E apt -yqq update
           sudo -E apt -yqq full-upgrade
-          sudo -E apt -yqq install dos2unix libfuse-dev libxml2 python3-setools python3-setuptools rsync clang
-          # rsync 供 bpf-headers 的 headers_install；clang 供 dae 的 eBPF 编译
+          sudo -E apt -yqq install dos2unix libfuse-dev libxml2 python3-setools python3-setuptools rsync clang dwarves
+          # rsync 供 bpf-headers；clang 供 dae eBPF 编译；dwarves(pahole) 供 vmlinux-btf/内核 BTF
           sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
           sudo -E systemctl daemon-reload
           sudo -E timedatectl set-timezone "Asia/Shanghai"
