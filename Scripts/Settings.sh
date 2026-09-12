@@ -109,6 +109,7 @@ BANNER="./package/base-files/files/etc/banner"
 
  =======================================================
    RivWRT - based on ones20250/Openwrt-AX6600
+   " Flow downstream, not upstream. "
    aurora / athena-led / bandix-plus / daede / nss
    ImmortalWrt %D %V, %C
  =======================================================
