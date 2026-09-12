@@ -154,6 +154,19 @@ if [ -f "$IMG_MK" ]; then
 fi
 
 # =========================================================
+# RivWRT：菜单归拢（消除单项目录）
+# wolultra：管控(control) -> 服务；samba4：NAS -> 服务（ImmortalWrt 魔改路径还原）
+# =========================================================
+cat > "$UDIR/99-rivwrt-menus" <<'RIVWRT_MENUS'
+#!/bin/sh
+[ -f /usr/share/luci/menu.d/luci-app-wolultra.json ] && \
+	sed -i "s#\"admin/control/wolultra\"#\"admin/services/wolultra\"#" /usr/share/luci/menu.d/luci-app-wolultra.json
+[ -f /usr/share/luci/menu.d/luci-app-samba4.json ] && \
+	sed -i "s#\"admin/nas/samba4\"#\"admin/services/samba4\"#" /usr/share/luci/menu.d/luci-app-samba4.json
+RIVWRT_MENUS
+chmod +x "$UDIR/99-rivwrt-menus"
+
+# =========================================================
 # RivWRT：无线固化（三频分明 / US 法规 / 非 DFS 信道）
 # 背景：生成器 mac80211.uc 默认 country=CN 且信道可能落 DFS（如信道 100），
 # CN 法规下 DFS 信道 AP 直接禁用（首启一个 5G radio 起不来的根因）。
