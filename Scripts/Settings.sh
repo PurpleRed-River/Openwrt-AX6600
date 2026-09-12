@@ -154,6 +154,15 @@ if [ -f "$IMG_MK" ]; then
 fi
 
 # =========================================================
+# RivWRT：daede 全局暗色标志补丁
+# daede 的 config.js 会在页面加载时探测背景亮度，低于阈值就往 <html>
+# 设置 data-darkmode=true（全局属性），aurora 响应后整站变暗。
+# 屏蔽该设置点：daede 自身卡片默认亮色设计不受影响，主题保持稳定浅色
+# =========================================================
+CFG_JS=$(find ./package/luci-app-daede -name "config.js" 2>/dev/null | head -1)
+[ -n "$CFG_JS" ] && sed -i "s#document\.documentElement\.setAttribute('data-darkmode', 'true');#/* RivWRT: keep global dark-mode flag untouched */#" "$CFG_JS" && echo "RivWRT: daede dark-mode patch applied"
+
+# =========================================================
 # RivWRT：FullCone NAT 固化开启（IPv4；FullConeNAT6 有争议默认不动）
 # 对应防火墙页"启用 FullConeNAT"开关，游戏机/P2P 的 NAT 行为更友好
 # =========================================================
