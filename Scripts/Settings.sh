@@ -154,6 +154,17 @@ if [ -f "$IMG_MK" ]; then
 fi
 
 # =========================================================
+# RivWRT：FullCone NAT 固化开启（IPv4；FullConeNAT6 有争议默认不动）
+# 对应防火墙页"启用 FullConeNAT"开关，游戏机/P2P 的 NAT 行为更友好
+# =========================================================
+cat > "$UDIR/96-rivwrt-fullcone" <<'RIVWRT_FC'
+#!/bin/sh
+uci -q set firewall.@defaults[0].fullcone='1'
+uci commit firewall
+RIVWRT_FC
+chmod +x "$UDIR/96-rivwrt-fullcone"
+
+# =========================================================
 # RivWRT：菜单归拢（消除单项目录）
 # wolultra：管控(control) -> 服务；samba4：NAS -> 服务（ImmortalWrt 魔改路径还原）
 # =========================================================
