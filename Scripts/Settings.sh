@@ -164,6 +164,23 @@ RIVWRT_FC
 chmod +x "$UDIR/96-rivwrt-fullcone"
 
 # =========================================================
+# RivWRT：网络配置对新端口命名的纠正
+# 覆盖从旧命名（wan=2.5G 进桥 / wan 接口绑 lan1）升级上来的配置；
+# 新刷机时等幂（与官方默认一致，无副作用）
+# =========================================================
+cat > "$UDIR/98-rivwrt-net-fix" <<'RIVWRT_NETFIX'
+#!/bin/sh
+for DEV in 0 1 2 3 4; do
+	NAME=$(uci -q get network.@device[$DEV].name)
+	[ "$NAME" = "br-lan" ] && uci set network.@device[$DEV].ports='lan1 lan2 lan3 lan4'
+done
+uci -q set network.wan.device='wan'
+uci -q set network.wan6.device='wan'
+uci commit network
+RIVWRT_NETFIX
+chmod +x "$UDIR/98-rivwrt-net-fix"
+
+# =========================================================
 # RivWRT：菜单归拢（消除单项目录）
 # wolultra：管控(control) -> 服务；samba4：NAS -> 服务（ImmortalWrt 魔改路径还原）
 # =========================================================
