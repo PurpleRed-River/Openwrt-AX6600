@@ -151,6 +151,7 @@ fi
 # 时序说明：radio 配置由 netifd 启动时硬件检测生成，uci-defaults 跑得太早
 # （wireless 段尚不存在会空转），故全部逻辑放 init.d S99（无线就绪后执行一次）。
 # 硬件拓扑：2.4G(ahb) / 5G-1 游戏 4x4(ahb, 44/160MHz) / 5G-2 影音(QCN9074 PCIe, 149/80MHz)
+# 参数采用 ones20250 官方推荐：US 法规 / 功率 24dBm / 信道 11-44-149
 # =========================================================
 mkdir -p "./package/base-files/files/etc/init.d"
 cat > "./package/base-files/files/etc/init.d/rivwrt-wifi" <<'RIVWRT_WIFI'
@@ -171,8 +172,9 @@ start_service() {
 	for RADIO in $(uci -q show wireless | sed -n "s/^\(wireless\.radio[0-9]*\)\.type=.*/\1/p"); do
 		BAND=$(uci -q get wireless.$RADIO.band)
 		IFACE=$(uci -q show wireless | sed -n "s/^\(wireless\.[a-z_0-9]*\)\.device=.$RADIO.$/\1/p" | head -1)
-		# 法规统一 US（根治 DFS 误判）
+		# 法规统一 US + 功率 24dBm（ones20250 推荐配置）
 		uci -q set wireless.$RADIO.country='US'
+		uci -q set wireless.$RADIO.txpower='24'
 		case "$BAND" in
 			2g)
 				uci -q set wireless.$RADIO.channel='11'
