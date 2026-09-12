@@ -190,13 +190,13 @@ start_service() {
 						# 5G-2 影音频段：QCN9074 PCIe，2x2 80MHz
 						uci -q set wireless.$RADIO.channel='149'
 						uci -q set wireless.$RADIO.htmode='HT80'
-						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5G-2'
+						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.8G'
 						;;
 					*ahb*)
 						# 5G-1 游戏频段：IPQ6010 内建 4x4 160MHz
 						uci -q set wireless.$RADIO.channel='44'
 						uci -q set wireless.$RADIO.htmode='HT160'
-						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5G-1'
+						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.2G'
 						;;
 					*) continue ;;
 				esac
