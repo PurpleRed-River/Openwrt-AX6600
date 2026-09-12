@@ -210,6 +210,53 @@ chmod +x "$UDIR/99-rivwrt-menus"
 
 
 # =========================================================
+# RivWRT：podman-compose 包（上游 feeds 无此包，自建）
+# PyPI sdist 打包，依赖 python3 + python3-yaml + python3-dotenv
+# 版本与哈希已钉死，纯 Python 无需编译
+# =========================================================
+PCDIR=./package/podman-compose
+mkdir -p $PCDIR
+cat > $PCDIR/Makefile <<'EOF'
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=podman-compose
+PKG_VERSION:=1.6.0
+PKG_RELEASE:=1
+
+PKG_SOURCE:=podman_compose-$(PKG_VERSION).tar.gz
+PKG_SOURCE_URL:=https://files.pythonhosted.org/packages/1f/80/a6ada19562b12ed466dac5c3e02aef5ed7c8d0881864d80e0d94d0dc71f5/
+PKG_HASH:=c83fd9bcbaa635100d581ce52a7a4b712ee0d457481232aff392efe3ebc5a217
+PKG_BUILD_DIR:=$(BUILD_DIR)/podman_compose-$(PKG_VERSION)
+
+PKG_LICENSE:=GPL-2.0-only
+PKG_MAINTAINER:=RivWRT
+
+include $(INCLUDE_DIR)/package.mk
+
+define Package/podman-compose
+  SECTION:=utils
+  CATEGORY:=Utilities
+  TITLE:=docker-compose implementation for podman (CLI)
+  DEPENDS:=+python3 +python3-yaml +python3-dotenv +podman
+endef
+
+define Package/podman-compose/description
+  podman-compose: run docker-compose.yml stacks with podman (CLI only).
+endef
+
+Build/Compile:=:
+
+define Package/podman-compose/install
+	$(INSTALL_DIR) $(1)/usr/lib/podman-compose
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/podman_compose.py $(1)/usr/lib/podman-compose/podman_compose.py
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(LN) ../lib/podman-compose/podman_compose.py $(1)/usr/bin/podman-compose
+endef
+
+$(eval $(call BuildPackage,podman-compose))
+EOF
+
+# =========================================================
 # RivWRT：luci-app-rivwrt-nss —— NSS 开关与状态页（独立包）
 # =========================================================
 PKGDIR=./package/luci-app-rivwrt-nss
@@ -280,15 +327,15 @@ cat > $PKGDIR/root/www/luci-static/resources/view/rivwrt/nss.js <<'EOF'
 'require dom';
 'require ui';
 
-var execFile = rpc.declare({
+var callExec = rpc.declare({
 	object: 'file',
 	method: 'exec',
-	params: ['command'],
+	params: [ 'command', 'params' ],
 	expect: { code: 0 }
 });
 
 function readStatus() {
-	return execFile('/usr/libexec/rivwrt/nss-status').then(function (res) {
+	return callExec('/usr/libexec/rivwrt/nss-status', []).then(function (res) {
 		var out = {};
 		(res.stdout || '').split('\n').forEach(function (line) {
 			var m = line.match(/^([a-z_0-9]+)=(.*)$/);
@@ -298,116 +345,101 @@ function readStatus() {
 	}).catch(function () { return {}; });
 }
 
-function runNss(action) {
-	return execFile('/etc/init.d/qca-nss-ecm ' + action).then(function () {
-		return readStatus();
-	});
+function control(action) {
+	return callExec('/etc/init.d/qca-nss-ecm', [ action ]);
 }
 
 return view.extend({
-	render: function () {
+	load: function () {
+		return readStatus();
+	},
+
+	render: function (st) {
+		var self = this;
+		this.table = E('table', { 'class': 'table' });
+
 		var body = E([
-			E('h2', { 'style': 'margin-bottom:1em' }, _('NSS 硬件加速')),
+			E('h2', _('NSS 硬件加速')),
 			E('p', { 'style': 'margin-bottom:1em' },
-				_('qca-nss-ecm 硬件加速引擎状态与开关。停用后流量回退内核软转发（bandix 统计将变准确，吞吐性能下降）；'
-				+ '启用后直连流量走 NSS 硬件加速。防火墙页的"路由/NAT 卸载"请保持"无"，与本引擎无冲突。')),
-			E('div', { 'class': 'cbi-section', 'id': 'nss-status-section' }, [
-				E('div', { 'class': 'cbi-section-node' },
-					E('table', { 'class': 'table', 'id': 'nss-status-table' })
-				)
-			]),
+				_('qca-nss-ecm 硬件加速引擎状态与开关。停用后流量回退内核软转发（bandix 统计将变准确，吞吐下降）；启用后直连流量由 NSS 硬件加速。防火墙页的路由/NAT卸载选项请保持“无”。')),
+			E('div', { 'class': 'cbi-section' },
+				E('div', { 'class': 'cbi-section-node' }, this.table)),
 			E('div', { 'class': 'cbi-page-actions', 'style': 'margin-top:1em' }, [
 				E('button', {
 					'class': 'btn cbi-button-action',
-					'id': 'nss-btn-start',
-					'click': ui.createHandlerFn(this, function (ev) {
-						return runNss('start').then(this.refreshStatus.bind(this));
+					'click': ui.createHandlerFn(this, function () {
+						return control('start').then(function () { return self.refresh(); });
 					})
 				}, _('启用 NSS 加速')),
 				' ',
 				E('button', {
 					'class': 'btn cbi-button-negative',
-					'id': 'nss-btn-stop',
-					'click': ui.createHandlerFn(this, function (ev) {
-						return runNss('stop').then(this.refreshStatus.bind(this));
+					'click': ui.createHandlerFn(this, function () {
+						return control('stop').then(function () { return self.refresh(); });
 					})
 				}, _('停用 NSS 加速')),
 				' ',
 				E('button', {
 					'class': 'btn',
-					'id': 'nss-btn-autostart',
-					'click': ui.createHandlerFn(this, function (ev) {
-						return readStatus().then(function (st) {
-							var action = (st.autostart === '1') ? 'disable' : 'enable';
-							return execFile('/etc/init.d/qca-nss-ecm ' + action);
-						}).then(this.refreshStatus.bind(this));
+					'click': ui.createHandlerFn(this, function () {
+						return readStatus().then(function (s) {
+							return control(s.autostart === '1' ? 'disable' : 'enable');
+						}).then(function () { return self.refresh(); });
 					})
 				}, _('切换开机自启'))
 			]),
-			E('div', { 'style': 'margin-top:1em; font-size:90%; color:var(--weak,#888)' },
-				_('提示：停用 NSS 期间路由/NAT 卸载无需改动；状态每 5 秒自动刷新。'))
+			E('div', { 'style': 'margin-top:1em;font-size:90%;opacity:.6' },
+				_('状态每 5 秒自动刷新。'))
 		]);
+
+		poll.add(function () { return self.refresh(); }, 5);
+		dom.content(this.table, this.renderRows(st));
 		return body;
 	},
 
-	refreshStatus: function () {
+	renderRows: function (st) {
+		var rows = [];
+		function row(label, value) {
+			rows.push(E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td left', 'width': '33%' }, label),
+				E('td', { 'class': 'td left' }, value)
+			]));
+		}
+		if (st && st.ecm === 'running')
+			row(_('ECM 引擎状态'), E('span', { 'class': 'label label-success' }, _('运行中')));
+		else
+			row(_('ECM 引擎状态'), E('span', { 'class': 'label label-warning' }, _('已停用（软转发）')));
+
+		row(_('开机自启'), (st && st.autostart === '1') ? _('是') : _('否'));
+
+		if (!st || st.stats === 'unavailable') {
+			row(_('NSS 引擎负载'), _('暂不可用（debugfs 未就绪）'));
+		} else {
+			var cores = Object.keys(st).filter(function (k) { return k.indexOf('load_') === 0; }).sort();
+			if (cores.length === 0) {
+				row(_('NSS 引擎负载'), _('暂无数据'));
+			} else {
+				cores.forEach(function (k) {
+					row(_('NSS 引擎负载 (Core %s)').format(k.replace('load_', '')),
+						'%s%'.format(st[k]));
+				});
+			}
+		}
+		return E('tbody', rows);
+	},
+
+	refresh: function () {
 		var self = this;
 		return readStatus().then(function (st) {
-			var rows = [];
-			function row(label, value, cls) {
-				rows.push(E('tr', { 'class': 'tr' }, [
-					E('td', { 'class': 'td left', 'width': '33%' }, label),
-					E('td', { 'class': 'td left' + (cls ? ' ' + cls : '') }, value)
-				]));
-			}
-			if (st.ecm === 'running') {
-				row(_('ECM 引擎状态'), E('span', { 'class': 'label label-success' }, _('运行中')));
-			} else {
-				row(_('ECM 引擎状态'), E('span', { 'class': 'label label-warning' }, _('已停用（软转发）')));
-			}
-			row(_('开机自启'), st.autostart === '1' ? _('是') : _('否'));
-			if (st.stats === 'unavailable') {
-				row(_('NSS 统计'), _('debugfs 不可用（引擎未运行或内核不支持）'));
-			} else {
-				var cores = Object.keys(st).filter(function (k) {
-					return k.indexOf('load_') === 0;
-				}).sort();
-				if (cores.length) {
-					cores.forEach(function (k) {
-						row(_('NSS 引擎负载 (Core %s)').format(k.replace('load_', '')),
-							E('span', { 'class': 'label label-success' }, '%s%'.format(st[k])));
-					});
-				} else {
-					row(_('NSS 统计'), _('暂无数据'));
-				}
-			}
-
-			var table = document.getElementById('nss-status-table');
-			if (table) {
-				dom.content(table, E('tbody', rows));
-			}
+			dom.content(self.table, self.renderRows(st));
 		});
 	},
 
-	load: function () {
-		return Promise.resolve();
-	},
-
-	render: function () {
-		var self = this;
-		var body = this.render ? view.prototype.render.call(this) : null;
-		// render() 需要绑定 this 供按钮 handler 使用
-		return Promise.resolve(body).then(function (el) {
-			poll.add(self.refreshStatus.bind(self), 5);
-			self.refreshStatus();
-			return el;
-		});
-	},
-
-	handleSaveApply: null,
 	handleSave: null,
+	handleSaveApply: null,
 	handleReset: null
 });
+
 EOF
 
 cat > $PKGDIR/root/usr/libexec/rivwrt/nss-status <<'EOF'
@@ -474,7 +506,7 @@ start_service() {
 				CHANGED=1
 				;;
 			5g)
-				PHY=$(jsonfilter -s /tmp/.wlan-status.json -e "$RADIO.interfaces[0].ifname" 2>/dev/null | cut -d- -f1)
+				PHY=$(jsonfilter -i /tmp/.wlan-status.json -e "$RADIO.interfaces[0].ifname" 2>/dev/null | cut -d- -f1)
 				DEVPATH=$(readlink -f /sys/class/ieee80211/$PHY/device 2>/dev/null)
 				case "$DEVPATH" in
 					*pci*)
@@ -489,7 +521,13 @@ start_service() {
 						uci -q set wireless.$RADIO.htmode='HT160'
 						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.2G'
 						;;
-					*) continue ;;
+					*)
+						# 探测失败（ubus 数据未就绪等）：回落非 DFS 安全值，
+						# 保证不残留生成器的 DFS 默认信道导致 AP 起不来
+						uci -q set wireless.$RADIO.channel='149'
+						uci -q set wireless.$RADIO.htmode='HT80'
+						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5G'
+						;;
 				esac
 				CHANGED=1
 				;;
@@ -499,6 +537,7 @@ start_service() {
 	for IFACE in $(uci -q show wireless | sed -n "s/^\(wireless\.[a-z_0-9]*\)\.device=.*/\1/p"); do
 		uci -q set wireless.$IFACE.encryption='none'
 		uci -q delete wireless.$IFACE.key 2>/dev/null
+		CHANGED=1
 	done
 	if [ "$CHANGED" = "1" ]; then
 		uci commit wireless
