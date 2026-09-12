@@ -1,3 +1,17 @@
+# =========================================================
+# RivWRT 构建期定制脚本
+# 由 WRT-CORE.yml 在 make defconfig 之前调用（cwd = wrt 源码树根）
+#
+# 本脚本产出的内容：
+#   /etc/uci-defaults  96-fullcone · 98-net-fix · 99-podman · 99-menus
+#   /etc/init.d        rivwrt-wifi（三频固化，S99 自启）+ banner
+#   /package/          自建包：luci-app-rivwrt-nss · podman-compose
+#   树内补丁（白名单）：DTS 端口互换 · KERNEL_SIZE=12288k ·
+#                      daede 暗色屏蔽 · 主题依赖/SSID/内存水位线
+#
+# 自建包清单与提取模式见本文件"组件注入"区块；
+# 配置增量见 Config/GENERAL_AX6600_RIVWRT.txt。
+# =========================================================
 #!/bin/bash
 
 apply_sed_to_matches() {

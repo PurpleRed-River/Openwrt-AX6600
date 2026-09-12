@@ -41,6 +41,40 @@
 
 ---
 
+## 2026-09-12 · 运行时修复与增强批次
+
+### 修复（编译层已验证通过后的运行时问题）
+
+- `Settings.sh`：UDIR 变量未定义（删网口互换块时误删定义）→
+  所有 uci-defaults 写根目录失败，菜单归拢/FullCone/podman 关闭/网络纠正全部未生效（模拟树验证修复）
+- 无线 init.d 缺 rc.d 启用链接 → 三频固化未执行（补 S99rivwrt-wifi 链接）
+- 无线 init.d：jsonfilter -s 误用（应 -i）→ 5G 频段探测失败；
+  加固：探测失败回落 149/HT80 非 DFS 安全值，不残留生成器的 DFS 默认信道
+- NSS 页面 JS：重复定义 render + fs.exec 参数误用 → 重写（bun 语法校验）
+- Config 漏 `CONFIG_PACKAGE_luci-app-rivwrt-nss=y` → NSS 页面未进固件（已补）
+- `podman-compose`：上游 immortalwrt/packages 无此包（死配置行）→
+  自建 PyPI 打包（1.6.0 sdist + sha256 钉死，依赖 python3-yaml/dotenv）
+
+### 新增
+
+- DTS 端口 label 互换（wan↔lan1）：系统名 = 物理丝印 = 角色语义一致；
+  弃 uci-defaults 网口互换方案（实测拔插确认丝印 WAN=dp5、丝印 LAN1=dp1）
+- 网络配置纠正 uci-defaults（98-rivwrt-net-fix）：兼容旧命名配置升级
+- ksmbd 替换 Samba4（省 ~34MB 常驻；上游无打印/域控需求，纯收益）
+- `CONFIG_VERSION_DIST="RivWRT"`：banner/openwrt_release/系统 ID 品牌化
+- `CONFIG_DEBUG_INFO_BTF=y`：内核原生 BTF（vmlinux-btf 包仍作 dae 依赖兜底）
+- podman API 服务默认关闭（省 ~45MB；podman 包 init 无条件常驻 system service）
+- banner：figlet 字样 + 项目格言 "Flow downstream, not upstream."
+- FullCone NAT 固化开启（96-rivwrt-fullcone）
+- 分区适配：KERNEL_SIZE=12288k（实测 A 槽 0:HLOS=12288KB，GPT 对齐）
+
+### 文档
+
+- README 全量重构（组件表/网口表/无线表/使用指南折叠块/构建系统说明）
+- CHANGELOG 补运行时修复批次（本段）
+
+---
+
 ## 上游历史（fork 自 ones20250/Openwrt-AX6600）
 
 上游按 PURE（纯净）/ PLUS（预装 OpenClash、PassWall2、Docker 等）双版本发布，机制详见上游仓库。

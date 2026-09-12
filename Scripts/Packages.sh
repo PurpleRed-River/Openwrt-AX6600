@@ -1,3 +1,20 @@
+# =========================================================
+# RivWRT 外部组件注入清单
+# 由 WRT-CORE.yml 在 Custom Packages 阶段调用（cwd = wrt/package/）
+#
+# 组件（无条件注入，RIVWRT profile）：
+#   aurora        eamonxg/luci-theme-aurora        主题
+#   athena-led    unraveloop/JDC-AX6600-...        LED 点阵屏（pkg 提取两子包）
+#   bandix-plus   timsaya/openwrt-bandix-plus      流量统计后端（pkg）
+#   luci-app-bandix-plus  timsaya/luci-app-bandix-plus     统计前端（pkg）
+#   dae           kenzok8/openwrt-daede            代理一体包（pkg-exact 提取
+#                 dae/daed/luci-app-daede/vmlinux-btf 四子包）
+#   partexp       sirpdboy/luci-app-partexp        分区扩容 Web 工具
+#   wolultra      ones20250/packages               网络唤醒（pkg-exact）
+#
+# 新增组件：仿照下方 UPDATE_PACKAGE 调用（仓库/分支/提取模式），
+# 配套 CONFIG_PACKAGE_ 行加到 Config/GENERAL_AX6600_RIVWRT.txt。
+# =========================================================
 #!/bin/bash
 
 #安装和更新软件包
