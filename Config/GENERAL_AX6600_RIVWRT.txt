@@ -90,6 +90,9 @@ CONFIG_PACKAGE_luci-app-vnstat=y
 # 状态历史曲线（CPU/内存/接口流量图表，collectd 常驻约 10MB）
 CONFIG_PACKAGE_luci-app-statistics=y
 
+# NSS 加速管理页（自建包：开关 + 每 Core 负载）
+CONFIG_PACKAGE_luci-app-rivwrt-nss=y
+
 # -----------------
 # 文件共享：ksmbd（内核态 SMB，替换基座的 Samba4）
 # 1G RAM 设备省 ~34MB 常驻（smbd/nmbd/notifyd/cleanupd 全家），

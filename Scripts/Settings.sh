@@ -153,6 +153,12 @@ CFG_JS=$(find ./package/luci-app-daede -name "config.js" 2>/dev/null | head -1)
 [ -n "$CFG_JS" ] && sed -i "s#document\.documentElement\.setAttribute('data-darkmode', 'true');#/* RivWRT: keep global dark-mode flag untouched */#" "$CFG_JS" && echo "RivWRT: daede dark-mode patch applied"
 
 # =========================================================
+# RivWRT：uci-defaults 目标目录（后续所有首启脚本写入此处）
+# =========================================================
+UDIR="./package/base-files/files/etc/uci-defaults"
+mkdir -p "$UDIR"
+
+# =========================================================
 # RivWRT：FullCone NAT 固化开启（IPv4；FullConeNAT6 有争议默认不动）
 # 对应防火墙页"启用 FullConeNAT"开关，游戏机/P2P 的 NAT 行为更友好
 # =========================================================
@@ -547,3 +553,6 @@ start_service() {
 }
 RIVWRT_WIFI
 chmod +x "./package/base-files/files/etc/init.d/rivwrt-wifi"
+# 生成 rc.d 启动链接（固件层启用，否则首启不会执行）
+mkdir -p "./package/base-files/files/etc/rc.d"
+ln -sf ../init.d/rivwrt-wifi "./package/base-files/files/etc/rc.d/S99rivwrt-wifi"
