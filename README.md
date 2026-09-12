@@ -44,9 +44,6 @@
 
 基座沿用上游：**NSS 硬件加速全套**、**firewall4/nftables**、ath11k 三频、内存水位调优、自动挂载。
 
-定制细节：[`Config/GENERAL_AX6600_RIVWRT.txt`](Config/GENERAL_AX6600_RIVWRT.txt) ·
-[`Scripts/Packages.sh`](Scripts/Packages.sh) · [`Scripts/Settings.sh`](Scripts/Settings.sh)（均逐行中文注释）
-
 ---
 
 ## 🔧 固件特性
