@@ -99,14 +99,23 @@ fi
 # =========================================================
 # RivWRT：banner 标识（简短一行，注明上游来源与定制身份）
 # =========================================================
-for BANNER in $(find ./package ./target -type f -path "*base-files*/etc/banner" 2>/dev/null); do
-	if ! grep -q "RivWRT" "$BANNER"; then
-		cat >> "$BANNER" <<'RIVWRT_BANNER'
+BANNER="./package/base-files/files/etc/banner"
+[ -f "$BANNER" ] && cat > "$BANNER" <<'RIVWRT_BANNER'
+ ______________________________
+|  ____ _____ _   _   _  __  __|
+| |  _ \_   _| | | | | |/ /\ / /|
+| | |_) || | | | | | | ' V  V / |
+| |_|  _||_| |_|_|_|_|/\_/\_/  |
+|                                |
+|  RivWRT (based on              |
+|  ones20250/Openwrt-AX6600)     |
+|_______________________________|
 
-RivWRT (based on ones20250/Openwrt-AX6600) | aurora / athena-led / bandix-plus / daede
+ -----------------------------------------------------
+ __omp_magic("D", "%V, %C")
+ aurora / athena-led / bandix-plus / daede
+ -----------------------------------------------------
 RIVWRT_BANNER
-	fi
-done
 
 # =========================================================
 # RivWRT：网口互换（首刷自动生效）
