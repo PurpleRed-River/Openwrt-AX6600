@@ -174,6 +174,9 @@ cat > "$UDIR/99-rivwrt-menus" <<'RIVWRT_MENUS'
 	sed -i "s#\"admin/control/wolultra\"#\"admin/services/wolultra\"#" /usr/share/luci/menu.d/luci-app-wolultra.json
 [ -f /usr/share/luci/menu.d/luci-app-samba4.json ] && \
 	sed -i "s#\"admin/nas/samba4\"#\"admin/services/samba4\"#" /usr/share/luci/menu.d/luci-app-samba4.json
+# bandix：网络 -> 服务
+[ -f /usr/share/luci/menu.d/luci-app-bandix-plus.json ] && \
+	sed -i "s#admin/network/bandix_plus#admin/services/bandix_plus#g" /usr/share/luci/menu.d/luci-app-bandix-plus.json
 RIVWRT_MENUS
 chmod +x "$UDIR/99-rivwrt-menus"
 
