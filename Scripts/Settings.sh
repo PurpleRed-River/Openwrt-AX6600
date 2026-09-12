@@ -181,6 +181,18 @@ RIVWRT_NETFIX
 chmod +x "$UDIR/98-rivwrt-net-fix"
 
 # =========================================================
+# RivWRT：podman API 服务默认关闭
+# podman 包自带 init 脚本会常驻 "podman system service"（实测 ~45MB），
+# 纯 CLI 用法不需要；需要远程 API（如接 Portainer）时 /etc/init.d/podman start
+# =========================================================
+cat > "$UDIR/99-rivwrt-podman" <<'RIVWRT_PODMAN'
+#!/bin/sh
+/etc/init.d/podman stop 2>/dev/null
+/etc/init.d/podman disable 2>/dev/null
+RIVWRT_PODMAN
+chmod +x "$UDIR/99-rivwrt-podman"
+
+# =========================================================
 # RivWRT：菜单归拢（消除单项目录）
 # wolultra：管控(control) -> 服务；samba4：NAS -> 服务（ImmortalWrt 魔改路径还原）
 # =========================================================
