@@ -6,7 +6,7 @@
 
 *基于 [ones20250/Openwrt-AX6600](https://github.com/ones20250/Openwrt-AX6600) 纯净基座*
 
-`IPQ6010` `16M+2G` `1G RAM` `128G eMMC` `NSS 加速` `dae eBPF` `kernel 6.18`
+`IPQ6010` `12M+2G` `1G RAM` `128G eMMC` `NSS 加速` `dae eBPF` `kernel 6.18`
 
 *" Flow downstream, not upstream. "*
 
