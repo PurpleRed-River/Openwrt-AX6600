@@ -97,7 +97,7 @@ jobs:
       - name: Initialization Values
         run: |
           echo "WRT_DATE=$(TZ=UTC-8 date +"%y.%m.%d-%H.%M.%S")" >> $GITHUB_ENV
-          echo "WRT_MARK=${GITHUB_REPOSITORY%%/*}" >> $GITHUB_ENV
+          echo "WRT_MARK=RivWRT" >> $GITHUB_ENV  # 状态页编译标识品牌化（上游默认取 GitHub 用户名）
           WRT_PROFILE_UPPER=$(echo "${WRT_PROFILE:-PURE}" | tr '[:lower:]' '[:upper:]')
           case "$WRT_PROFILE_UPPER" in
             PURE|PLUS|RIVWRT) ;;
