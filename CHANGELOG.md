@@ -15,7 +15,7 @@
 - `WRT-CORE.yml`：profile 白名单加入 `RIVWRT`；固件命名改为
   `RivWRT-时间-ipq60xx-jdcloud_re-cs-02-*.bin`；Release 文案更新为 RivWRT 组件清单。
 - `WRT-TEST.yml`：PROFILE 选项与默认值改为 RIVWRT，默认参数与正式编译一致。
-- 默认值：主机名/SSID `RivWRT`、WiFi 密码 `1qaz!QAZ`、管理地址 `192.168.100.1`、默认主题 aurora。
+- 默认值：主机名/SSID `RivWRT`、管理地址 `192.168.100.1`、默认主题 aurora；WiFi 默认开放（无密码）。
 
 ### 组件（Scripts/Packages.sh RivWRT 注入块）
 

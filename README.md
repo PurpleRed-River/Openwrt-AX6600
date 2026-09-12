@@ -34,7 +34,7 @@ RivWRT 增量配置见 [`Config/GENERAL_AX6600_RIVWRT.txt`](Config/GENERAL_AX660
 | 主机名 | `RivWRT` |
 | 管理密码 | 无（首次 SSH 登录后请立即设置） |
 | WiFi 名称 | `RivWRT` |
-| WiFi 密码 | `1qaz!QAZ` |
+| WiFi 密码 | 默认开放（无密码，LuCI 无线页自行设置） |
 
 WiFi 推荐调优（雅典娜三频）：2.4G 信道 11 / 20MHz；5G-1 游戏频段 信道 44 / 160MHz（不稳则退 80MHz）；
 5G-2 影音频段 信道 149 / 80MHz；通用：地区 US、功率 24dBm、WPA2-PSK（CCMP）。
