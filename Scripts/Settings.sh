@@ -193,6 +193,18 @@ RIVWRT_PODMAN
 chmod +x "$UDIR/99-rivwrt-podman"
 
 # =========================================================
+# RivWRT：每周 fstrim（eMMC 空闲块回收，降低写放大）
+# 实时 discard 有性能抖动，故用定期批量回收；幂等追加 cron
+# =========================================================
+cat > "$UDIR/97-rivwrt-fstrim" <<'RIVWRT_TRIM'
+#!/bin/sh
+grep -q "fstrim" /etc/crontabs/root 2>/dev/null || \
+	echo "0 4 * * 0 fstrim -a >/dev/null 2>&1" >> /etc/crontabs/root
+/etc/init.d/cron restart 2>/dev/null
+RIVWRT_TRIM
+chmod +x "$UDIR/97-rivwrt-fstrim"
+
+# =========================================================
 # RivWRT：菜单归拢（消除单项目录）
 # wolultra：管控(control) -> 服务；samba4：NAS -> 服务（ImmortalWrt 魔改路径还原）
 # =========================================================
