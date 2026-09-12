@@ -180,6 +180,233 @@ cat > "$UDIR/99-rivwrt-menus" <<'RIVWRT_MENUS'
 RIVWRT_MENUS
 chmod +x "$UDIR/99-rivwrt-menus"
 
+
+# =========================================================
+# RivWRT：luci-app-rivwrt-nss —— NSS 开关与状态页（独立包）
+# =========================================================
+PKGDIR=./package/luci-app-rivwrt-nss
+mkdir -p $PKGDIR/root/usr/share/luci/menu.d \
+	$PKGDIR/root/usr/share/rpcd/acl.d \
+	$PKGDIR/root/www/luci-static/resources/view/rivwrt \
+	$PKGDIR/root/usr/libexec/rivwrt
+
+cat > $PKGDIR/Makefile <<'EOF'
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=luci-app-rivwrt-nss
+PKG_VERSION:=1.0.0
+PKG_RELEASE:=1
+
+LUCI_TITLE:=RivWRT NSS acceleration toggle and live status
+LUCI_DEPENDS:=+luci-base +qca-nss-ecm
+LUCI_PKGARCH:=all
+
+include $(TOPDIR)/feeds/luci/luci.mk
+
+define Package/$(PKG_NAME)/description
+  RivWRT 定制：NSS 硬件加速开关与实时状态（引擎负载/时钟/加速连接数）
+endef
+EOF
+
+cat > $PKGDIR/root/usr/share/luci/menu.d/luci-app-rivwrt-nss.json <<'EOF'
+{
+	"admin/services/rivwrt_nss": {
+		"title": "NSS 加速",
+		"order": 30,
+		"action": { "type": "firstchild" },
+		"depends": { "acl": [ "luci-app-rivwrt-nss" ], "fs": { "/etc/init.d/qca-nss-ecm": "file" } }
+	},
+	"admin/services/rivwrt_nss/status": {
+		"title": "状态与开关",
+		"order": 10,
+		"action": { "type": "view", "path": "rivwrt/nss" },
+		"depends": { "acl": [ "luci-app-rivwrt-nss" ] }
+	}
+}
+EOF
+
+cat > $PKGDIR/root/usr/share/rpcd/acl.d/luci-app-rivwrt-nss.json <<'EOF'
+{
+	"luci-app-rivwrt-nss": {
+		"description": "Grant access to RivWRT NSS control and status",
+		"read": {
+			"ubus": { "service": ["list"] },
+			"file": {
+				"/usr/libexec/rivwrt/nss-status": ["exec"]
+			}
+		},
+		"write": {
+			"file": {
+				"/etc/init.d/qca-nss-ecm": ["exec"]
+			}
+		}
+	}
+}
+EOF
+
+cat > $PKGDIR/root/www/luci-static/resources/view/rivwrt/nss.js <<'EOF'
+'use strict';
+'require view';
+'require poll';
+'require rpc';
+'require dom';
+'require ui';
+
+var execFile = rpc.declare({
+	object: 'file',
+	method: 'exec',
+	params: ['command'],
+	expect: { code: 0 }
+});
+
+function readStatus() {
+	return execFile('/usr/libexec/rivwrt/nss-status').then(function (res) {
+		var out = {};
+		(res.stdout || '').split('\n').forEach(function (line) {
+			var m = line.match(/^([a-z_0-9]+)=(.*)$/);
+			if (m) out[m[1]] = m[2];
+		});
+		return out;
+	}).catch(function () { return {}; });
+}
+
+function runNss(action) {
+	return execFile('/etc/init.d/qca-nss-ecm ' + action).then(function () {
+		return readStatus();
+	});
+}
+
+return view.extend({
+	render: function () {
+		var body = E([
+			E('h2', { 'style': 'margin-bottom:1em' }, _('NSS 硬件加速')),
+			E('p', { 'style': 'margin-bottom:1em' },
+				_('qca-nss-ecm 硬件加速引擎状态与开关。停用后流量回退内核软转发（bandix 统计将变准确，吞吐性能下降）；'
+				+ '启用后直连流量走 NSS 硬件加速。防火墙页的"路由/NAT 卸载"请保持"无"，与本引擎无冲突。')),
+			E('div', { 'class': 'cbi-section', 'id': 'nss-status-section' }, [
+				E('div', { 'class': 'cbi-section-node' },
+					E('table', { 'class': 'table', 'id': 'nss-status-table' })
+				)
+			]),
+			E('div', { 'class': 'cbi-page-actions', 'style': 'margin-top:1em' }, [
+				E('button', {
+					'class': 'btn cbi-button-action',
+					'id': 'nss-btn-start',
+					'click': ui.createHandlerFn(this, function (ev) {
+						return runNss('start').then(this.refreshStatus.bind(this));
+					})
+				}, _('启用 NSS 加速')),
+				' ',
+				E('button', {
+					'class': 'btn cbi-button-negative',
+					'id': 'nss-btn-stop',
+					'click': ui.createHandlerFn(this, function (ev) {
+						return runNss('stop').then(this.refreshStatus.bind(this));
+					})
+				}, _('停用 NSS 加速')),
+				' ',
+				E('button', {
+					'class': 'btn',
+					'id': 'nss-btn-autostart',
+					'click': ui.createHandlerFn(this, function (ev) {
+						return readStatus().then(function (st) {
+							var action = (st.autostart === '1') ? 'disable' : 'enable';
+							return execFile('/etc/init.d/qca-nss-ecm ' + action);
+						}).then(this.refreshStatus.bind(this));
+					})
+				}, _('切换开机自启'))
+			]),
+			E('div', { 'style': 'margin-top:1em; font-size:90%; color:var(--weak,#888)' },
+				_('提示：停用 NSS 期间路由/NAT 卸载无需改动；状态每 5 秒自动刷新。'))
+		]);
+		return body;
+	},
+
+	refreshStatus: function () {
+		var self = this;
+		return readStatus().then(function (st) {
+			var rows = [];
+			function row(label, value, cls) {
+				rows.push(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td left', 'width': '33%' }, label),
+					E('td', { 'class': 'td left' + (cls ? ' ' + cls : '') }, value)
+				]));
+			}
+			if (st.ecm === 'running') {
+				row(_('ECM 引擎状态'), E('span', { 'class': 'label label-success' }, _('运行中')));
+			} else {
+				row(_('ECM 引擎状态'), E('span', { 'class': 'label label-warning' }, _('已停用（软转发）')));
+			}
+			row(_('开机自启'), st.autostart === '1' ? _('是') : _('否'));
+			if (st.stats === 'unavailable') {
+				row(_('NSS 统计'), _('debugfs 不可用（引擎未运行或内核不支持）'));
+			} else {
+				var cores = Object.keys(st).filter(function (k) {
+					return k.indexOf('load_') === 0;
+				}).sort();
+				if (cores.length) {
+					cores.forEach(function (k) {
+						row(_('NSS 引擎负载 (Core %s)').format(k.replace('load_', '')),
+							E('span', { 'class': 'label label-success' }, '%s%'.format(st[k])));
+					});
+				} else {
+					row(_('NSS 统计'), _('暂无数据'));
+				}
+			}
+
+			var table = document.getElementById('nss-status-table');
+			if (table) {
+				dom.content(table, E('tbody', rows));
+			}
+		});
+	},
+
+	load: function () {
+		return Promise.resolve();
+	},
+
+	render: function () {
+		var self = this;
+		var body = this.render ? view.prototype.render.call(this) : null;
+		// render() 需要绑定 this 供按钮 handler 使用
+		return Promise.resolve(body).then(function (el) {
+			poll.add(self.refreshStatus.bind(self), 5);
+			self.refreshStatus();
+			return el;
+		});
+	},
+
+	handleSaveApply: null,
+	handleSave: null,
+	handleReset: null
+});
+EOF
+
+cat > $PKGDIR/root/usr/libexec/rivwrt/nss-status <<'EOF'
+#!/bin/sh
+# RivWRT NSS 状态采集：输出 key=value 供 LuCI 页面解析
+echo "ts=$(date +%s)"
+# 服务运行状态（procd 注册）
+if ubus -q call service list 2>/dev/null | grep -q '"qca-nss-ecm"'; then
+	echo "ecm=running"
+else
+	echo "ecm=stopped"
+fi
+# 开机自启状态
+/etc/init.d/qca-nss-ecm enabled 2>/dev/null && echo "autostart=1" || echo "autostart=0"
+# debugfs（NSS 统计所在，未挂载则自动挂）
+# 引擎负载：stats/cpu_load_ubi（实测路径），Core N 块取 Avg 值
+D=/sys/kernel/debug/qca-nss-drv/stats
+mount | grep -q "debugfs" || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+if [ -r "$D/cpu_load_ubi" ]; then
+	echo "stats=ok"
+	awk '/^Core [0-9]+:/{c=$2; gsub(":","",c)} $3 ~ /%$/ {n=$2; gsub("%","",n); print "load_" c "=" n}' "$D/cpu_load_ubi"
+else
+	echo "stats=unavailable"
+fi
+EOF
+chmod +x $PKGDIR/root/usr/libexec/rivwrt/nss-status
+
 # =========================================================
 # RivWRT：无线固化（三频分明 / US 法规 / 非 DFS 信道）
 # 背景：生成器 mac80211.uc 默认 country=CN 且信道可能落 DFS（如信道 100），
