@@ -359,7 +359,7 @@ jobs:
             管理密码：${{ env.WRT_PW }}
 
             WiFi 名称：${{ env.WRT_SSID }}
-            WiFi 密码：${{ env.WRT_WORD }}
+            WiFi 密码：默认开放（无密码，请刷机后自行设置）
             ━━━━━━━━━━━━━━━━━━━━━━━
 
             📶 WiFi 推荐设置（雅典娜三频三 WiFi）
