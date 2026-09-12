@@ -65,6 +65,8 @@ CONFIG_PACKAGE_luci-app-daede=y
 # 只装环境，不默认跑任何容器；容器数据建议落 eMMC 独立分区
 # -----------------
 CONFIG_PACKAGE_podman=y
+# compose 编排（CLI 使用：podman-compose up -d）
+CONFIG_PACKAGE_podman-compose=y
 CONFIG_PACKAGE_kmod-veth=y
 
 # -----------------
