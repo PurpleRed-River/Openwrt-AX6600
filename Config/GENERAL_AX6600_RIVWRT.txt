@@ -37,6 +37,8 @@ CONFIG_PACKAGE_luci-app-athena-led=y
 # 默认主题替换由 Settings.sh 完成（luci collection 依赖 bootstrap → aurora）
 # -----------------
 CONFIG_PACKAGE_luci-theme-aurora=y
+# 主题设置界面（aurora 官方配套：预设/色彩/布局/背景）
+CONFIG_PACKAGE_luci-app-aurora-config=y
 
 # -----------------
 # 流量行为统计（bandix-plus：eBPF 旁路观察）

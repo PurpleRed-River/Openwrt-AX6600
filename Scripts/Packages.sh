@@ -90,6 +90,8 @@ UPDATE_PACKAGE() {
 
 # RivWRT：LuCI 主题（eamonxg 版 aurora，自带 uci-defaults 首次启动自动激活）
 UPDATE_PACKAGE "aurora" "eamonxg/luci-theme-aurora" "master"
+# RivWRT：aurora 主题设置界面（5 套预设/自定义色彩/导航布局/主题商店）
+UPDATE_PACKAGE "aurora-config" "eamonxg/luci-app-aurora-config" "master"
 
 # RivWRT：LED 点阵屏控制器 —— 使用上游树内官方版
 # （package/emortal/luci-app-athena-led，ones20250 官方固件同款，自带预编译二进制零下载）。
