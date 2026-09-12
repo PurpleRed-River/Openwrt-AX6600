@@ -1,6 +1,6 @@
 <div align="center">
 
-# $\color{red}{\rule{0.15em}{1em}}\!$RivWRT
+# $\color{red}{\rule{0.314em}{0.7em}}\$ RivWRT
 
 **AX6600 雅典娜 · 个人定制固件**
 
