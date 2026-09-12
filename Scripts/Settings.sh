@@ -117,29 +117,6 @@ BANNER="./package/base-files/files/etc/banner"
  -----------------------------------------------------
 RIVWRT_BANNER
 
-# =========================================================
-# RivWRT：网口互换（首刷自动生效）
-# 默认布局：wan = 2.5G 口，lan1-4 = 千兆
-# 定制布局：2.5G 口(wan)并入 br-lan 做内网，原 lan1 改做 WAN
-# 用途：千兆宽带接原 LAN1 丝印口，2.5G 口留给内网高速互访
-# =========================================================
-UDIR="./package/base-files/files/etc/uci-defaults"
-mkdir -p "$UDIR"
-cat > "$UDIR/99-rivwrt-lan-wan-swap" <<'RIVWRT_SWAP'
-#!/bin/sh
-# 仅对京东云雅典娜 RE-CS-02 生效，其他设备跳过
-[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = "jdcloud,re-cs-02" ] || exit 0
-# br-lan：移出 lan1，加入 2.5G 口（设备名 wan）
-for DEV in 0 1 2 3 4; do
-	NAME=$(uci -q get network.@device[$DEV].name)
-	[ "$NAME" = "br-lan" ] && uci set network.@device[$DEV].ports='wan lan2 lan3 lan4'
-done
-# wan 接口：物理设备从 2.5G 口改为 lan1
-uci -q set network.wan.device='lan1'
-uci -q set network.wan6.device='lan1'
-uci commit network
-RIVWRT_SWAP
-chmod +x "$UDIR/99-rivwrt-lan-wan-swap"
 
 # =========================================================
 # RivWRT：内核分区尺寸适配（匹配已刷 GPT 的 A 槽布局）
@@ -152,6 +129,19 @@ if [ -f "$IMG_MK" ]; then
 	sed -i "/Device\/jdcloud_re-cs-02/,/TARGET_DEVICES += jdcloud_re-cs-02/ s/KERNEL_SIZE := 6144k/KERNEL_SIZE := 12288k/" "$IMG_MK"
 	echo "RivWRT: KERNEL_SIZE -> 12288k (A槽 12MiB 内核分区)"
 fi
+
+# =========================================================
+# RivWRT：DTS 端口 label 互换（根治网口互换）
+# 实测映射（拔插测试）：丝印 WAN(2.5G)=DSA dp5(wan)，丝印 LAN1=DSA dp1(lan1)。
+# 设备树 label 对调后系统名与物理丝印语义一致，
+# 官方默认配置（lan=lan1-4, wan=wan）自动实现 2.5G=LAN / LAN1=WAN，
+# 原先的网口互换 uci-defaults 不再需要（已删除）。
+# 注意：label-mac-device 仍指向 dp1，MAC 分配不变。
+# =========================================================
+DTS_FILE="./target/linux/qualcommax/dts/ipq6010-re-cs-02.dts"
+sed -i "/&dp1 {/,/};/ s/label = \"lan1\"/label = \"wan\"/" "$DTS_FILE"
+sed -i "/&dp5 {/,/};/ s/label = \"wan\"/label = \"lan1\"/" "$DTS_FILE"
+echo "RivWRT: DTS port labels swapped (wan<->lan1)"
 
 # =========================================================
 # RivWRT：daede 全局暗色标志补丁
