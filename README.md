@@ -8,7 +8,7 @@
 
 `IPQ6010` `4×A53` `1G RAM` `128G eMMC` `NSS 加速` `dae eBPF` `kernel 6.18`
 
-*" Flow downstream, not upstream. "*"
+*" Flow downstream, not upstream. "*
 
 </div>
 
