@@ -22,7 +22,6 @@
 - [默认参数](#-默认参数)
 - [云编译与刷机](#-云编译与刷机)
 - [使用指南](#-使用指南)
-- [构建系统说明](#-构建系统说明)
 - [目录结构](#-目录结构)
 
 ---
@@ -160,29 +159,6 @@ podman-compose up -d
 SSH 登录显示点阵 RivWRT 标志 + 项目格言 + 组件清单，由 `Settings.sh` 构建期生成（`/etc/banner`）。
 
 </details>
-
----
-
-## 🛠 构建系统说明
-
-```
-.github/workflows/
-  QCA-ALL.yml        正式编译（RIVWRT 单 profile）
-  WRT-TEST.yml       配置验证（TEST=true 只出 .config）
-  WRT-PKG-TEST.yml   单包链编译验证 + 关键符号自动检查
-  WRT-CORE.yml       编译核心（环境/缓存/发布）
-Scripts/
-  Packages.sh        外部组件克隆注入（RivWRT 组件清单在此维护）
-  Settings.sh        构建期定制（主题/banner/无线固化/DTS 互换/
-                     KERNEL_SIZE/uci-defaults 生成/自建包生成）
-Config/
-  IPQ60XX-WIFI-YES.txt        平台与设备（RE-CS-02）
-  GENERAL_AX6600.txt          通用基座（NSS/防火墙/无线，跟随上游）
-  GENERAL_AX6600_RIVWRT.txt   RivWRT 增量（全部定制项，中文注释）
-```
-
-生成包说明：`luci-app-rivwrt-nss` 与 `podman-compose` 由 `Settings.sh` 在构建期生成于
-`package/`（上游 feeds 无此二包），版本与哈希钉死在生成块内，升级只改生成块中的版本号。
 
 ## 更新日志
 
