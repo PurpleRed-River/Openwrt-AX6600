@@ -483,10 +483,10 @@ start_service() {
 				;;
 		esac
 	done
-	# 所有 iface 统一加密
+	# 所有 iface 默认开放（无密码）；需要加密时在 LuCI 无线页自行设置
 	for IFACE in $(uci -q show wireless | sed -n "s/^\(wireless\.[a-z_0-9]*\)\.device=.*/\1/p"); do
-		uci -q set wireless.$IFACE.encryption='psk2'
-		uci -q set wireless.$IFACE.key='1qaz!QAZ'
+		uci -q set wireless.$IFACE.encryption='none'
+		uci -q delete wireless.$IFACE.key 2>/dev/null
 	done
 	if [ "$CHANGED" = "1" ]; then
 		uci commit wireless
