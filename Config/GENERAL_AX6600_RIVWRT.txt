@@ -8,6 +8,9 @@
 # 设备：JDCloud RE-CS-02（京东云 AX6600 雅典娜）
 # 平台：Qualcomm IPQ6010 / qualcommax-ipq60xx
 # 适配分区：12M 内核 + 2G rootfs（chenxin527/uboot-qsdk12.5-build）
+# 固件品牌：banner / openwrt_release / 状态页的发行版 ID 显示为 RivWRT
+CONFIG_VERSION_DIST="RivWRT"
+
 # =============================================
 # BPF 工具链：dae 的 eBPF 代码用宿主 clang 编译（需 clang>=12，runner 预装满足）。
 # 注意：BPF_TOOLCHAIN choice 的可见性挂在 "if DEVEL" 上，基座 CONFIG_DEVEL=n
