@@ -1,12 +1,12 @@
 <div align="center">
 
-# █ RivWRT
+# $\color{#FF0000}{\text{█}}$ RivWRT
 
 **AX6600 雅典娜 · 个人定制固件**
 
 *基于 [ones20250/Openwrt-AX6600](https://github.com/ones20250/Openwrt-AX6600) 纯净基座*
 
-`IPQ6010` `4×A53` `1G RAM` `128G eMMC` `NSS 加速` `dae eBPF` `kernel 6.18`
+`IPQ6010` `16M+2G` `1G RAM` `128G eMMC` `NSS 加速` `dae eBPF` `kernel 6.18`
 
 *" Flow downstream, not upstream. "*
 
