@@ -112,7 +112,7 @@ BANNER="./package/base-files/files/etc/banner"
 |_______________________________|
 
  -----------------------------------------------------
- __omp_magic("D", "%V, %C")
+ %D %V, %C
  aurora / athena-led / bandix-plus / daede
  -----------------------------------------------------
 RIVWRT_BANNER
