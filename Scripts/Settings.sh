@@ -143,3 +143,75 @@ if [ -f "$IMG_MK" ]; then
 	sed -i "/Device\/jdcloud_re-cs-02/,/TARGET_DEVICES += jdcloud_re-cs-02/ s/KERNEL_SIZE := 6144k/KERNEL_SIZE := 12288k/" "$IMG_MK"
 	echo "RivWRT: KERNEL_SIZE -> 12288k (A槽 12MiB 内核分区)"
 fi
+
+# =========================================================
+# RivWRT：无线固化（三频分明 / US 法规 / 非 DFS 信道）
+# 背景：生成器 mac80211.uc 默认 country=CN 且信道可能落 DFS（如信道 100），
+# CN 法规下 DFS 信道 AP 直接禁用（首启一个 5G radio 起不来的根因）。
+# 时序说明：radio 配置由 netifd 启动时硬件检测生成，uci-defaults 跑得太早
+# （wireless 段尚不存在会空转），故全部逻辑放 init.d S99（无线就绪后执行一次）。
+# 硬件拓扑：2.4G(ahb) / 5G-1 游戏 4x4(ahb, 44/160MHz) / 5G-2 影音(QCN9074 PCIe, 149/80MHz)
+# =========================================================
+mkdir -p "./package/base-files/files/etc/init.d"
+cat > "./package/base-files/files/etc/init.d/rivwrt-wifi" <<'RIVWRT_WIFI'
+#!/bin/sh /etc/rc.common
+START=99
+USE_PROCD=0
+MARKER=/etc/.rivwrt-wifi-named
+start_service() {
+	[ -f "$MARKER" ] && return 0
+	# 等 wireless 就绪（最多 120 秒）
+	i=0
+	while [ $i -lt 60 ]; do
+		ubus -q call network.wireless status >/dev/null 2>&1 && break
+		i=$((i+1)); sleep 2
+	done
+	ubus -q call network.wireless status > /tmp/.wlan-status.json || return 1
+	CHANGED=0
+	for RADIO in $(uci -q show wireless | sed -n "s/^\(wireless\.radio[0-9]*\)\.type=.*/\1/p"); do
+		BAND=$(uci -q get wireless.$RADIO.band)
+		IFACE=$(uci -q show wireless | sed -n "s/^\(wireless\.[a-z_0-9]*\)\.device=.$RADIO.$/\1/p" | head -1)
+		# 法规统一 US（根治 DFS 误判）
+		uci -q set wireless.$RADIO.country='US'
+		case "$BAND" in
+			2g)
+				uci -q set wireless.$RADIO.channel='11'
+				uci -q set wireless.$RADIO.htmode='HT20'
+				[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT'
+				CHANGED=1
+				;;
+			5g)
+				PHY=$(jsonfilter -s /tmp/.wlan-status.json -e "$RADIO.interfaces[0].ifname" 2>/dev/null | cut -d- -f1)
+				DEVPATH=$(readlink -f /sys/class/ieee80211/$PHY/device 2>/dev/null)
+				case "$DEVPATH" in
+					*pci*)
+						# 5G-2 影音频段：QCN9074 PCIe，2x2 80MHz
+						uci -q set wireless.$RADIO.channel='149'
+						uci -q set wireless.$RADIO.htmode='HT80'
+						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5G-2'
+						;;
+					*ahb*)
+						# 5G-1 游戏频段：IPQ6010 内建 4x4 160MHz
+						uci -q set wireless.$RADIO.channel='44'
+						uci -q set wireless.$RADIO.htmode='HT160'
+						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5G-1'
+						;;
+					*) continue ;;
+				esac
+				CHANGED=1
+				;;
+		esac
+	done
+	# 所有 iface 统一加密
+	for IFACE in $(uci -q show wireless | sed -n "s/^\(wireless\.[a-z_0-9]*\)\.device=.*/\1/p"); do
+		uci -q set wireless.$IFACE.encryption='psk2'
+		uci -q set wireless.$IFACE.key='1qaz!QAZ'
+	done
+	if [ "$CHANGED" = "1" ]; then
+		uci commit wireless
+		wifi reload
+	fi
+	touch "$MARKER"
+}
+RIVWRT_WIFI
+chmod +x "./package/base-files/files/etc/init.d/rivwrt-wifi"
