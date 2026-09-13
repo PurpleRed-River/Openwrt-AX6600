@@ -330,6 +330,9 @@ jobs:
           retention-days: 14
 
       - name: Release Firmware
+        # Release 创建可能因 GitHub API 故障失败（实测 500 连续三次）；
+        # 产物已由上一步 Artifacts 留存，此处失败不阻塞 run（避免整轮判失败）。
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.WRT_CONFIG }}-${{ env.WRT_PROFILE }}-${{ env.WRT_INFO }}-${{ env.WRT_BRANCH }}-${{ env.WRT_DATE }}
