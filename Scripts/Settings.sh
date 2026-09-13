@@ -511,7 +511,7 @@ cat > "$WIFI_INIT" <<'RIVWRT_WIFI'
 #!/bin/sh /etc/rc.common
 START=99
 MARKER=/etc/.rivwrt-wifi-named
-start_service() {
+start() {
 	[ -f "$MARKER" ] && return 0
 	i=0
 	while [ $i -lt 60 ]; do
