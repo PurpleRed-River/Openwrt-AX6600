@@ -977,9 +977,9 @@ ln -sf ../init.d/rivwrt-swap "./package/base-files/files/etc/rc.d/S20rivwrt-swap
 #        等 debugfs 就绪 → chmod 644 cpu_load_ubi
 #        （collectd 硬性拒绝以 root 跑 exec，见 collectd-exec.pod CAVEATS）
 #   ② uci-defaults 99-rivwrt-nss-stat
-#        开 collectd_exec 插件 + 注册采集脚本（cmduser root）
+#        开 collectd_exec 插件 + 注册采集脚本（cmduser=nobody，见下）
 #        rrdtool.backup=1 → 关机时打包，重启恢复（平时 RRD 在 /tmp 不写 eMMC）
-#   ③ collectd 每 30s 跑 nss-collectd.sh
+#   ③ collectd exec 插件每 30s fork nss-collectd.sh（以 nobody 身份）
 #        解析 "Core 0: / Min Avg Max / 7% 7% 34%" 取 Avg → PUTVAL（plugin=nss-load）
 #   ④ RRD /tmp/rrd/<host>/nss-load/gauge-core0.rrd
 #        页面经 rrdtool1 fetch 读取
@@ -1013,14 +1013,17 @@ mkdir -p "$(dirname "$NSSCOLLECT")"
 # -------------------------------------------------------
 # RivWRT：统计页（状态 → 图表）NSS 条目定义
 #
-# luci-app-statistics 的 rrdtool.js 扫描本目录下 *.js 作为图定义，
-# 文件名须匹配 RRD 的 plugin 名（此处 nss-load）。
+# luci-app-statistics 的 rrdtool.js 扫描本目录下 *.js 作为图定义（按
+# plugin 名匹配 RRD 文件名，此处 nss-load），与 cpu/memory/interface/
+# iwinfo/load 的定义同目录并存。
 #
-# 主题化：统计页 PNG 由 rrdtool 生成，无法用 CSS 变量随主题切换，
-# 故用 rrdopts 注入 rrdtool 参数——透明背景 + 中性灰 + 点状网格：
-#   --color TAG#rrggbbaa（aa=alpha，FF 实心 / 00 透明）
-#   --border 0 关立体边框；--grid-dash 1:3 点状网格
-# 曲线取 aurora 亮色品牌蓝 #0085b5（PNG 不能双模式自适应）。
+# ★ 刻意【不】自定义配色（无 rrdopts）：
+#   统计页的 PNG 由 rrdtool 生成，而 aurora 主题在暗色下对整张图施加
+#       [data-darkmode] ... [data-plugin] img { filter: hue-rotate(150deg) invert(100%) }
+#   该滤镜统一作用于所有图。若此处单独注入透明背景/品牌色，暗色下会被
+#   反相+色相旋转，颜色失控、且亮色下与其它图的白底+3D边框不一致。
+#   故保持 rrdtool 默认样式，让 6 张图观感完全一致。
+#   仅保留非颜色的语义选项（y 轴范围/数值格式），这些不受滤镜影响。
 # -------------------------------------------------------
 DEFDIR="$PKGDIR/root/www/luci-static/resources/statistics/rrdtool/definitions"
 mkdir -p "$DEFDIR"
@@ -1045,26 +1048,13 @@ return baseclass.extend({
 				},
 				options: {
 					gauge__core0: {
-						color: "0085b5",
+						color: "00a0e0",
 						title: "NSS Core 0",
 						noarea: false,
 						overlay: true,
 						weight: 1
 					}
-				},
-				rrdopts: [
-					'--color', 'BACK#00000000',
-					'--color', 'CANVAS#00000000',
-					'--color', 'SHADEA#00000000',
-					'--color', 'SHADEB#00000000',
-					'--color', 'FRAME#00000000',
-					'--color', 'FONT#7f858b',
-					'--color', 'AXIS#7f858b',
-					'--color', 'GRID#7f858b33',
-					'--color', 'MGRID#7f858b55',
-					'--border', '0',
-					'--grid-dash', '1:3'
-				]
+				}
 			}
 		};
 	}
@@ -1105,9 +1095,9 @@ chmod +x "$NSSCOLLECT"
 
 
 # ② uci-defaults：开 exec 插件 + 注册采集脚本（cmduser root）
-#    注意：collectd 官方硬性拒绝以 root 运行 exec；本脚本读 debugfs 需 root，
-#    故此处仍用 root，并靠 ① 已 chmod 644 + collectd 的 uid 检查绕过失败。
-#    若设备上 collectd 对 root 报错，可改 cmduser 'nobody'（文件已 644 可读）。
+#    注：collectd 硬性拒绝以 root 运行 exec（collectd-exec.pod CAVEATS：
+#    "The user ... may not have root privileges"），故 cmduser 必须非 root。
+#    debugfs 默认仅 root 可读，由 ① 的 init.d 预先 chmod 644，nobody 即可读取。
 NSSSTAT_UDIR="./package/base-files/files/etc/uci-defaults/99-rivwrt-nss-stat"
 mkdir -p "$(dirname "$NSSSTAT_UDIR")"
 cat > "$NSSSTAT_UDIR" <<'RIVWRT_NSSUDIR'
