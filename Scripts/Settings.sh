@@ -73,7 +73,7 @@ apply_sed_to_matches "./feeds/luci/modules/luci-mod-status/" "10_system.js" "s/(
 WIFI_UC="./package/network/config/wifi-scripts/files/lib/wifi/mac80211.uc"
 if [ -f "$WIFI_UC" ]; then
 	# SSID：按频段分名（band_name='2g'；两个 5G 用 radio 编号区分）
-	sed -i "s#^set \${si}\.ssid=.*#set \${si}.ssid='\${defaults?.ssid || ((band_name == '2g') ? '$WRT_SSID' : ((name == 'radio0') ? '$WRT_SSID-5.2G' : '$WRT_SSID-5.8G'))}'#" "$WIFI_UC"
+	sed -i "s#^set \${si}\.ssid=.*#set \${si}.ssid='\${defaults?.ssid || ((band_name == '2g') ? '$WRT_SSID-2.4G' : ((name == 'radio0') ? '$WRT_SSID-5.2G' : '$WRT_SSID-5.8G'))}'#" "$WIFI_UC"
 
 	# 信道与带宽：生成器默认 channel=auto、且 5G 强制 width<=80
 	# （源码：else if (width > 80) width = 80），无法表达 HE160。
@@ -384,32 +384,28 @@ cat > $PKGDIR/root/usr/share/rpcd/acl.d/luci-app-rivwrt-nss.json <<'EOF'
 		"read": {
 			"ubus": {
 				"service": [ "list" ],
-				"file": [ "exec" ]
+				"file": [ "exec" ],
+				"rc": [ "list" ]
 			},
 			"file": {
 				"/usr/libexec/rivwrt/nss-status": [ "exec" ],
 				"/usr/libexec/rivwrt/nss-status 2h": [ "exec" ],
 				"/usr/libexec/rivwrt/nss-status 12h": [ "exec" ],
 				"/usr/libexec/rivwrt/nss-status 1d": [ "exec" ],
-				"/usr/libexec/rivwrt/nss-status 1w": [ "exec" ],
-				"/etc/init.d/qca-nss-ecm enabled": [ "exec" ]
+				"/usr/libexec/rivwrt/nss-status 1w": [ "exec" ]
 			}
 		},
 		"write": {
 			"ubus": {
-				"file": [ "exec" ]
+				"file": [ "exec" ],
+				"rc": [ "init" ]
 			},
 			"file": {
 				"/usr/libexec/rivwrt/nss-status": [ "exec" ],
 				"/usr/libexec/rivwrt/nss-status 2h": [ "exec" ],
 				"/usr/libexec/rivwrt/nss-status 12h": [ "exec" ],
 				"/usr/libexec/rivwrt/nss-status 1d": [ "exec" ],
-				"/usr/libexec/rivwrt/nss-status 1w": [ "exec" ],
-				"/etc/init.d/qca-nss-ecm enabled": [ "exec" ],
-				"/etc/init.d/qca-nss-ecm start": [ "exec" ],
-				"/etc/init.d/qca-nss-ecm stop": [ "exec" ],
-				"/etc/init.d/qca-nss-ecm enable": [ "exec" ],
-				"/etc/init.d/qca-nss-ecm disable": [ "exec" ]
+				"/usr/libexec/rivwrt/nss-status 1w": [ "exec" ]
 			}
 		}
 	}
@@ -434,10 +430,21 @@ var RANGES = { '2h': '2 小时', '12h': '12 小时', '1d': '1 天', '1w': '1 周
 var LABEL = { '2h': '30s 采样', '12h': '2.5min 聚合', '1d': '5min 聚合', '1w': '30min 聚合' };
 
 /* 不设 expect: {code:0}：命令失败时 Promise 会被 reject，错误被 LuCI 吞掉，
-   用户只看到"点击没反应"。改为手动检查 code 并把 stderr 展示出来。 */
+   用户只看到"点击没反应"。改为手动检查返回并提示。 */
 var callExec = rpc.declare({
 	object: 'file', method: 'exec',
 	params: [ 'command', 'params' ]
+});
+
+/* ★ 启停服务用 ubus 的 rc 对象，而非 file.exec 跑 /etc/init.d/*：
+   这是 LuCI 官方做法（luci-mod-system/startup.js 同款），
+   无需在 acl 里逐条列举"含参数的完整命令"（rpcd 对 file.exec 的
+   鉴权要求 cmdline 精确匹配，脆弱且易错）。 */
+var callRcList = rpc.declare({
+	object: 'rc', method: 'list', expect: { '': {} }
+});
+var callRcInit = rpc.declare({
+	object: 'rc', method: 'init', params: [ 'name', 'action' ]
 });
 
 function sx(tag, attrs) {
@@ -448,37 +455,47 @@ function sx(tag, attrs) {
 }
 
 function readStatus(range) {
-	return callExec('/usr/libexec/rivwrt/nss-status', [ range || '2h' ]).then(function (res) {
-		var out = { load: {} };
-		(res.stdout || '').split('\n').forEach(function (line) {
-			var m = line.match(/^([a-z_0-9]+)=(.*)$/);
-			if (!m) return;
-			if (m[1].indexOf('load_') === 0)
-				out.load[m[1].substring(5)] = m[2];
-			else
-				out[m[1]] = m[2];
-		});
-		return out;
-	}).catch(function () { return { load: {} }; });
+	return Promise.all([
+		callExec('/usr/libexec/rivwrt/nss-status', [ range || '2h' ]).then(function (res) {
+			var out = { load: {} };
+			(res.stdout || '').split('\n').forEach(function (line) {
+				var m = line.match(/^([a-z_0-9]+)=(.*)$/);
+				if (!m) return;
+				if (m[1].indexOf('load_') === 0)
+					out.load[m[1].substring(5)] = m[2];
+				else
+					out[m[1]] = m[2];
+			});
+			return out;
+		}).catch(function () { return { load: {} }; }),
+
+		callRcList().catch(function () { return {}; })
+	]).then(function (r) {
+		var st = r[0], rc = r[1] && r[1]['qca-nss-ecm'];
+		/* 自启状态以 rc.list 为准：权威、且不依赖 file.exec 的鉴权 */
+		if (rc)
+			st.autostart = rc.enabled ? '1' : '0';
+		return st;
+	});
 }
 
 function notifyError(msg) {
 	ui.addNotification(null, E('p', {}, msg), 'error');
 }
 
-/* 执行 qca-nss-ecm 的 init 动作，失败时把退出码与 stderr 显示给用户
-   （原实现错误被静默吞掉，表现为"点击没反应"）。 */
+/* 经 ubus rc.init 执行 init 动作；失败时把原因提示给用户（不再静默）。 */
 function control(action) {
 	var labels = { start: _('启用'), stop: _('停用'), enable: _('开启自启'), disable: _('关闭自启') };
-	return callExec('/etc/init.d/qca-nss-ecm', [ action ]).then(function (res) {
-		if (!res || res.code !== 0) {
-			var detail = (res && res.stderr ? String(res.stderr).trim() : '') || _('无输出');
-			notifyError(_('%s失败（退出码 %s）：%s').format(
-				labels[action] || action, (res && res.code !== undefined) ? res.code : '?', detail));
-		}
-		return res;
+	var what = labels[action] || action;
+
+	return callRcInit('qca-nss-ecm', action).then(function (ret) {
+		/* rc.init 返回非 0 表示命令失败（LuCI startup.js 同判据） */
+		if (ret)
+			notifyError(_('%s失败（返回码 %s）').format(what, ret));
+		return true;
 	}).catch(function (err) {
-		notifyError(_('%s时调用出错：%s').format(labels[action] || action, err && err.message ? err.message : err));
+		notifyError(_('%s时调用出错：%s').format(what, err && err.message ? err.message : err));
+		return true;
 	});
 }
 
@@ -1002,7 +1019,7 @@ start() {
 
 		case "$BAND" in
 			2g)
-				WANT_SSID='__SSID__'; WANT_CH='11'; WANT_HT='HT20'
+				WANT_SSID='__SSID__-2.4G'; WANT_CH='11'; WANT_HT='HT20'
 				;;
 			5g)
 				case "$RADIO" in
