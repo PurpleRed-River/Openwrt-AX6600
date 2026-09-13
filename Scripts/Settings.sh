@@ -89,9 +89,16 @@ if [ -f "$WIFI_UC" ]; then
 	#   Call trace: ath11k_regd_update → regulatory_set_wiphy_regd
 	#   → ath11k_pci: failed to perform regd update : -22
 	#   （init.d 里 uci set country 再 wifi reload 即触发该热切换）
-	sed -i "s#^set \${s}\.country=.*#set \${s}.country='US'#" "$WIFI_UC"
+	# 功率：生成器完全不输出 txpower 行，此处插入（保持 US 上限 24dBm）
+	sed -i "s#^set \${s}\.country=.*#set \${s}.country='US'\nset \${s}.txpower='24'#" "$WIFI_UC"
 
-	echo "RivWRT: per-band SSID + channel + htmode + country(US) injected"
+	# 加密：生成器默认 psk2+ccmp + 密码 12345678，改为开放。
+	# ★ 必须编译期设定 —— 此前只靠 init.d 设 encryption=none，一旦 init.d
+	#   失败（时序/marker 等），WiFi 会带默认密码 12345678 而非开放。
+	sed -i "s#^set \${si}\.encryption=.*#set \${si}.encryption='none'#" "$WIFI_UC"
+	sed -i "s#^set \${si}\.key=.*#set \${si}.key=''#" "$WIFI_UC"
+
+	echo "RivWRT: per-band SSID + channel + htmode + country + txpower + encryption injected"
 fi
 
 # -------------------------------------------------------
@@ -949,74 +956,75 @@ mkdir -p "./package/base-files/files/etc/init.d" "./package/base-files/files/etc
 WIFI_INIT="./package/base-files/files/etc/init.d/rivwrt-wifi"
 cat > "$WIFI_INIT" <<'RIVWRT_WIFI'
 #!/bin/sh /etc/rc.common
+# RivWRT 无线兜底：逐项比对，仅在【与预期不符】时才修正并 reload。
+#
+# 编译期已在 mac80211.uc 注入 ssid/channel/htmode/country/txpower/encryption，
+# 故全新刷机（sysupgrade -n）时本脚本比对后无改动、不触发 wifi reload。
+# 价值在于【保留旧配置升级】的场景：旧固件可能残留 SSID=OWRT、加密 psk2、
+# 或非法 htmode（曾误写 HT160 —— 不在合法枚举内，致 5G radio 起不来）。
+#
+# ★ 刻意不设置 country：ath11k 对运行时国家码热切换脆弱，实测触发
+#   cfg80211 WARNING (net/wireless/reg.c:4035 reg_get_max_bandwidth)
+#   与 ath11k_pci: failed to perform regd update : -22，radio 直接起不来。
 START=99
 MARKER=/etc/.rivwrt-wifi-named
 start() {
 	[ -f "$MARKER" ] && return 0
-	# 等 /etc/config/wireless 生成：该文件由 netifd 首次启动时才写入；若 S99
-	# 跑在其之前，uci 读不到任何 radio。旧版用 ubus 判定 + 无条件 touch marker，
-	# 一旦空转就永久不再重试（实测刷完 SSID 仍是 OWRT）。
-	# 改用 uci 判定（不依赖 ubus），中途主动触发一次配置生成。
+
+	# 等 /etc/config/wireless 生成：该文件由 netifd 首次启动时写入，过早执行
+	# 会读不到任何 radio（曾因此空转且误落 marker，导致永久不再重试）。
 	i=0
 	while [ $i -lt 90 ]; do
 		[ -n "$(uci -q get wireless.radio0.band)" ] && break
 		[ $i -eq 20 ] && wifi config >/dev/null 2>&1
 		i=$((i+1)); sleep 2
 	done
+	# 配置未就绪 → 不落 marker，下次启动重试
 	[ -n "$(uci -q get wireless.radio0.band)" ] || return 1
+
 	CHANGED=0
-	for RADIO in $(uci -q show wireless | sed -n "s/^\\(wireless\\.radio[0-9]*\\)\\.type=.*/\\1/p"); do
+	for RADIO in $(uci -q show wireless | sed -n 's/^wireless\.\(radio[0-9]*\)=wifi-device$/\1/p'); do
 		BAND=$(uci -q get wireless.$RADIO.band)
-		IFACE=$(uci -q show wireless | sed -n "s/^\\(wireless\\.[a-z_0-9]*\\)\\.device=.$RADIO.$/\\1/p" | head -1)
-		uci -q set wireless.$RADIO.txpower='24'
-		# ★ 不在此设置 country：ath11k 对运行时国家码切换（regd update）脆弱，
-		#   uci set country + wifi reload 会触发 cfg80211 内核 WARNING（实测
-		#   reg.c:4035 reg_get_max_bandwidth）并伴随 regd update -22 失败。
-		#   country 已由编译期写入 mac80211.uc（'US'），radio 首启即带正确值。
-		# 射频参数按频段设置（全部非 DFS 主信道，避免 CAC 静默期与雷达避让）。
-		# ★ 教训：曾误用 htmode='HT160' —— 该值不在合法枚举内
-		#   （合法含 160 的仅 VHT160/HE160/EHT160，HT 系列最高 HT40±），
-		#   导致 5G 主 radio 无法启动（"5.2G 挂了"）。此处用 WiFi6 的 HE 系列。
+		IFACE=$(uci -q show wireless | sed -n "s/^wireless\.\([a-z_0-9]*\)\.device=$RADIO$/\1/p" | head -1)
+		[ -n "$IFACE" ] || continue
+
 		case "$BAND" in
 			2g)
-				uci -q set wireless.$RADIO.channel='11'
-				uci -q set wireless.$RADIO.htmode='HT20'
-				[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT'
-				CHANGED=1
+				WANT_SSID='__SSID__'; WANT_CH='11'; WANT_HT='HT20'
 				;;
 			5g)
-				# 两个 5G 按 radio 编号区分（与编译期 mac80211.uc 同一规则）：
-				#   radio0 = IPQ6010 内建 4x4（游戏段）→ 44 / HE160
-				#   radio2 = QCN9074 PCIe（影音段）  → 149 / HE80
 				case "$RADIO" in
-					radio0)
-						uci -q set wireless.$RADIO.channel='44'
-						uci -q set wireless.$RADIO.htmode='HE160'
-						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.2G'
-						;;
-					*)
-						uci -q set wireless.$RADIO.channel='149'
-						uci -q set wireless.$RADIO.htmode='HE80'
-						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.8G'
-						;;
+					radio0) WANT_SSID='__SSID__-5.2G'; WANT_CH='44';  WANT_HT='HE160' ;;
+					*)      WANT_SSID='__SSID__-5.8G'; WANT_CH='149'; WANT_HT='HE80'  ;;
 				esac
-				CHANGED=1
+				;;
+			*)
+				continue
 				;;
 		esac
+
+		[ "$(uci -q get wireless.$RADIO.channel)" = "$WANT_CH" ] || {
+			uci -q set wireless.$RADIO.channel="$WANT_CH"; CHANGED=1; }
+		[ "$(uci -q get wireless.$RADIO.htmode)" = "$WANT_HT" ] || {
+			uci -q set wireless.$RADIO.htmode="$WANT_HT"; CHANGED=1; }
+		[ "$(uci -q get wireless.$RADIO.txpower)" = '24' ] || {
+			uci -q set wireless.$RADIO.txpower='24'; CHANGED=1; }
+		[ "$(uci -q get wireless.$IFACE.ssid)" = "$WANT_SSID" ] || {
+			uci -q set wireless.$IFACE.ssid="$WANT_SSID"; CHANGED=1; }
+		[ "$(uci -q get wireless.$IFACE.encryption)" = 'none' ] || {
+			uci -q set wireless.$IFACE.encryption='none'
+			uci -q delete wireless.$IFACE.key 2>/dev/null
+			CHANGED=1; }
 	done
-	for IFACE in $(uci -q show wireless | sed -n "s/^\\(wireless\\.[a-z_0-9]*\\)\\.device=.*/\\1/p"); do
-		uci -q set wireless.$IFACE.encryption='none'
-		uci -q delete wireless.$IFACE.key 2>/dev/null
-		CHANGED=1
-	done
+
 	if [ "$CHANGED" = "1" ]; then
 		uci commit wireless
 		wifi reload
-		# 仅成功施加配置后才落 marker；失败则下次启动重试
-		touch "$MARKER"
 	fi
+	touch "$MARKER"
 }
 RIVWRT_WIFI
+sed -i "s/__SSID__/$WRT_SSID/g" "$WIFI_INIT"   # heredoc 引号形式，此处展开 SSID
 chmod +x "$WIFI_INIT"
 
 # rc.d 启动链接（固件层启用，否则首启不会执行）
