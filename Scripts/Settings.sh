@@ -303,7 +303,7 @@ PKG_VERSION:=1.0.0
 PKG_RELEASE:=1
 
 LUCI_TITLE:=RivWRT NSS acceleration toggle and live status
-LUCI_DEPENDS:=+luci-base +kmod-qca-nss-ecm
+LUCI_DEPENDS:=+luci-base
 LUCI_PKGARCH:=all
 
 include $(TOPDIR)/feeds/luci/luci.mk
