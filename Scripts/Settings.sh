@@ -573,3 +573,23 @@ chmod +x "$WIFI_INIT"
 # rc.d 启动链接（固件层启用，否则首启不会执行）
 mkdir -p "./package/base-files/files/etc/rc.d"
 ln -sf ../init.d/rivwrt-wifi "./package/base-files/files/etc/rc.d/S99rivwrt-wifi"
+
+# -------------------------------------------------------
+# RivWRT：swap 分区默认启用（eMMC mmcblk0p26）
+# 上游树对 jdcloud_re-cs-02 未做 swap 自动挂载；1G RAM 设备启用 swap
+# 承载跑分/插件缓存。传统 rc.common start() 风格（非 procd），
+# 避免 USE_PROCD 差异带来的 start_service 不调用问题。
+# -------------------------------------------------------
+SWAP_INIT="./package/base-files/files/etc/init.d/rivwrt-swap"
+cat > "$SWAP_INIT" <<'RIVWRT_SWAP'
+#!/bin/sh /etc/rc.common
+START=20
+start() {
+	[ -b /dev/mmcblk0p26 ] || return 0
+	# 幂等：未格式化才 mkswap（原厂/旧固件已格式化为 swap 则跳过）
+	blkid -t TYPE=swap /dev/mmcblk0p26 >/dev/null 2>&1 || mkswap /dev/mmcblk0p26 >/dev/null 2>&1
+	swapon /dev/mmcblk0p26 2>/dev/null
+}
+RIVWRT_SWAP
+chmod +x "$SWAP_INIT"
+ln -sf ../init.d/rivwrt-swap "./package/base-files/files/etc/rc.d/S20rivwrt-swap"
