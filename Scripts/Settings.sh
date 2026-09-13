@@ -1076,32 +1076,46 @@ mkdir -p "$(dirname "$NSSCOLLECT")"
 cat > "$NSSCOLLECT" <<'RIVWRT_NSSCOLLECT'
 #!/bin/sh
 # 采集 NSS 核心负载，输出 collectd exec 协议（PUTVAL）。
-# 输入格式（实测）：
+#
+# ★ 常驻循环，不退出：collectd exec 插件把 STDERR 接到管道，程序一旦退出
+#   （或重定向 fd2）该管道即 EOF，被判为异常并记日志：
+#       exec plugin: Program `...' has closed STDERR.
+#   （源码 exec.c 的 NOTICE 分支；且文档明说 exec 本就设计给长期运行的
+#    可执行文件："perfectly legal ... run for a long time and continuously
+#     write values to STDOUT"）
+#   故此处循环采集、持续持有 STDERR，退出由 collectd 发 SIGTERM 触发。
+#   采集周期取自 collectd 注入的环境变量 COLLECTD_INTERVAL（默认 30s）。
+#
+# 输入格式（设备实测）：
 #   CPU Utilization:
 #   Note: Averaged over 1 second
-#
 #   Core 0:
 #   Min     Avg     Max
 #    7%      7%      34%
-# 取 Avg 列（第 2 个百分比）。单核设备只有 Core 0（AX6600=IPQ6010）。
+# 取 avg 列（第 2 个百分比）。单核设备仅有 Core 0（AX6600=IPQ6010）。
 F=/sys/kernel/debug/qca-nss-drv/stats/cpu_load_ubi
-[ -r "$F" ] || exit 0
-V=$(awk '
-	/^Core [0-9]+:/ { core = $2; sub(":", "", core); has_core = 1; next }
-	has_core && /%/ {
-		n = split($0, a, /[ \t]+/)
-		for (i = 1; i <= n; i++) {
-			if (a[i] ~ /%$/) {
-				gsub("%", "", a[i])
-				print "RivWRT/nss-load/gauge-core" core " N:" a[i]
-				break
+INTERVAL="${COLLECTD_INTERVAL:-30}"
+case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=30 ;; esac
+
+while :; do
+	if [ -r "$F" ]; then
+		awk '
+			/^Core [0-9]+:/ { core = $2; sub(":", "", core); has_core = 1; next }
+			has_core && /%/ {
+				n = split($0, a, /[ \t]+/)
+				for (i = 1; i <= n; i++) {
+					if (a[i] ~ /%$/) {
+						gsub("%", "", a[i])
+						print "RivWRT/nss-load/gauge-core" core " N:" a[i]
+						break
+					}
+				}
+				has_core = 0
 			}
-		}
-		has_core = 0
-	}
-' "$F")
-[ -n "$V" ] || exit 0
-echo "$V"
+		' "$F"
+	fi
+	sleep "$INTERVAL"
+done
 RIVWRT_NSSCOLLECT
 chmod +x "$NSSCOLLECT"
 
