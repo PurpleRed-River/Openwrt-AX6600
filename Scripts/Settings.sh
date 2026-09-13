@@ -493,8 +493,10 @@ chmod +x $PKGDIR/root/usr/libexec/rivwrt/nss-status
 # CN 法规下 DFS 信道 AP 直接禁用（首启一个 5G radio 起不来的根因）。
 # 时序说明：radio 配置由 netifd 启动时硬件检测生成，uci-defaults 跑得太早
 # （wireless 段尚不存在会空转），故全部逻辑放 init.d S99（无线就绪后执行一次）。
-# 硬件拓扑：2.4G(ahb) / 5G-1 游戏 4x4(ahb, 44/160MHz) / 5G-2 影音(QCN9074 PCIe, 149/80MHz)
-# 参数采用 ones20250 官方推荐：US 法规 / 功率 24dBm / 信道 11-44-149
+# 硬件拓扑：2.4G(ahb) / 5G-1 游戏 4x4(ahb, 信道36) / 5G-2 影音(QCN9074 PCIe, 信道149)
+# 参数为稳定优先终态：CN 法规（行货 ath11k 处理最成熟）+ 全部非 DFS 信道 + 80MHz。
+# 放弃 US+HT160：160MHz 跨 DFS 雷达段（断流风险），且 mainline ath11k 对
+# 运行时国家码切换脆弱（regd update -22 会导致 radio 起不来，实测踩坑）。
 # =========================================================
 mkdir -p "./package/base-files/files/etc/init.d"
 cat > "./package/base-files/files/etc/init.d/rivwrt-wifi" <<'RIVWRT_WIFI'
@@ -516,8 +518,7 @@ start_service() {
 		BAND=$(uci -q get wireless.$RADIO.band)
 		IFACE=$(uci -q show wireless | sed -n "s/^\(wireless\.[a-z_0-9]*\)\.device=.$RADIO.$/\1/p" | head -1)
 		# 法规统一 US + 功率 24dBm（ones20250 推荐配置）
-		uci -q set wireless.$RADIO.country='US'
-		uci -q set wireless.$RADIO.txpower='24'
+		uci -q set wireless.$RADIO.country='CN'
 		case "$BAND" in
 			2g)
 				uci -q set wireless.$RADIO.channel='11'
@@ -530,22 +531,22 @@ start_service() {
 				DEVPATH=$(readlink -f /sys/class/ieee80211/$PHY/device 2>/dev/null)
 				case "$DEVPATH" in
 					*pci*)
-						# 5G-2 影音频段：QCN9074 PCIe，2x2 80MHz
+						# 5G-2 影音频段：QCN9074 PCIe
 						uci -q set wireless.$RADIO.channel='149'
-						uci -q set wireless.$RADIO.htmode='HT80'
+						uci -q set wireless.$RADIO.htmode='HE80'
 						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.8G'
 						;;
 					*ahb*)
-						# 5G-1 游戏频段：IPQ6010 内建 4x4 160MHz
-						uci -q set wireless.$RADIO.channel='44'
-						uci -q set wireless.$RADIO.htmode='HT160'
+						# 5G-1 游戏频段：IPQ6010 内建 4x4
+						uci -q set wireless.$RADIO.channel='36'
+						uci -q set wireless.$RADIO.htmode='HE80'
 						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.2G'
 						;;
 					*)
 						# 探测失败（ubus 数据未就绪等）：回落非 DFS 安全值，
 						# 保证不残留生成器的 DFS 默认信道导致 AP 起不来
 						uci -q set wireless.$RADIO.channel='149'
-						uci -q set wireless.$RADIO.htmode='HT80'
+						uci -q set wireless.$RADIO.htmode='HE80'
 						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5G'
 						;;
 				esac
