@@ -1046,11 +1046,44 @@ start() {
 			CHANGED=1; }
 	done
 
+	# 先应用改动
 	if [ "$CHANGED" = "1" ]; then
 		uci commit wireless
-		wifi reload
+		wifi reload >/dev/null 2>&1
 	fi
-	touch "$MARKER"
+
+	# ★ 起齐才算成功：实测「手动在界面反复禁用/启用几次后 5G 才起来」，
+	#   属启动时序竞争，根因在 mac80211.sh：
+	#       iw reg set "$country"; sleep 1
+	#   只等 1 秒，而 ath11k 的 regd 更新是异步 workqueue。三个 radio 并发
+	#   启动时都会调 iw reg set（读到的全局 reg 尚未生效），并发 regd 更新
+	#   竞争，部分 phy 失败（实测 dmesg: ath11k_pci 0000:01:00.0:
+	#   failed to perform regd update : -22），对应 radio 起不来。
+	#   此时再 reload 一次即可：全局 reg 已是目标值，mac80211.sh 会跳过
+	#   iw reg set，不再竞争 —— 这正是手动重试有效的原理。
+	WANT_AP=3
+	MAX_RELOAD=3
+	# 只匹配带引号的真实 SSID：iwinfo 对未启用的接口输出 "ESSID: unknown"，
+	# 用 'ESSID:' 会把它算作已启动（假阳性），导致误判"起齐了"。
+	count_ap() { iwinfo 2>/dev/null | grep -c 'ESSID: "'; }
+
+	r=0
+	while [ "$r" -lt "$MAX_RELOAD" ] && [ "$(count_ap)" -lt "$WANT_AP" ]; do
+		r=$((r+1))
+		wifi reload >/dev/null 2>&1
+		# 本轮最多等 20s 让其生效
+		i=0
+		while [ $i -lt 10 ] && [ "$(count_ap)" -lt "$WANT_AP" ]; do
+			i=$((i+1)); sleep 2
+		done
+	done
+
+	# 仅在三个 AP 全部起来后落 marker；否则下次启动重试（最多等 60s）
+	if [ "$(count_ap)" -ge "$WANT_AP" ]; then
+		touch "$MARKER"
+	else
+		logger -t rivwrt-wifi "仅 $(count_ap)/$WANT_AP 个 AP 起来（已重试 $r 次），未落 marker，下次启动重试"
+	fi
 }
 RIVWRT_WIFI
 sed -i "s/__SSID__/$WRT_SSID/g" "$WIFI_INIT"   # heredoc 引号形式，此处展开 SSID
