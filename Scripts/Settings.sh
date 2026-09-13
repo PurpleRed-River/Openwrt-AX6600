@@ -888,7 +888,10 @@ echo "ts=$(date +%s)"
 # ── 引擎运行状态 ──
 # ECM 是内核模块：其 init.d 的 start_service() 只做 modprobe、未 procd_open_service，
 # 故不出现在 ubus service list。曾用 ubus 检测 → 恒判 stopped、按钮看似无效。
-if lsmod 2>/dev/null | grep -q '^ecm '; then
+# 用 /proc/modules 而非 lsmod：lsmod 是 busybox applet，若未编译则该命令不存在，
+# 会导致恒判为 stopped（页面永远显示"已停用"，看似"按钮无效"）。
+# /proc/modules 由内核提供，始终可用。
+if grep -q '^ecm ' /proc/modules 2>/dev/null; then
 	echo "ecm=running"
 else
 	echo "ecm=stopped"
