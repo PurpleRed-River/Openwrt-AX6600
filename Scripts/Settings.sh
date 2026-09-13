@@ -344,7 +344,11 @@ PKG_VERSION:=1.0.0
 PKG_RELEASE:=1
 
 LUCI_TITLE:=RivWRT NSS acceleration toggle and live status
-LUCI_DEPENDS:=+luci-base
+# rrdtool1 提供 /usr/bin/rrdtool —— nss-status 用它读 RRD 历史。
+# 此前仅靠 luci-app-statistics 间接带入（它依赖 +rrdtool1），属隐式依赖；
+# 若该 app 被移除，历史图会静默失效。此处显式声明 +collectd-mod-exec
+# （采集 NSS 负载所需）。
+LUCI_DEPENDS:=+luci-base +rrdtool1 +collectd-mod-exec
 LUCI_PKGARCH:=all
 
 include $(TOPDIR)/feeds/luci/luci.mk
@@ -673,10 +677,12 @@ return view.extend({
 	parseHist: function (st) {
 		this.hist = [];
 		if (!st || !st.hist) return;
+		/* 按最后一个冒号切分：rrdtool 的 "<ts>: <val>" 与任何多余分隔符都能容错 */
 		st.hist.split(',').forEach(L.bind(function (seg) {
-			var p = seg.split(':');
-			if (p.length !== 2) return;
-			var t = parseInt(p[0], 10), v = parseFloat(p[1]);
+			var i = seg.lastIndexOf(':');
+			if (i < 1) return;
+			var t = parseInt(seg.substring(0, i), 10);
+			var v = parseFloat(seg.substring(i + 1));
 			if (isFinite(t) && isFinite(v))
 				this.hist.push({ t: t, v: Math.max(0, Math.min(100, v)) });
 		}, this));
@@ -936,8 +942,11 @@ esac
 echo "histrange=$RANGE"
 RRD=$(ls /tmp/rrd/*/nss-load/gauge-core0.rrd 2>/dev/null | head -1)
 if [ -n "$RRD" ] && [ -x /usr/bin/rrdtool ]; then
+	# rrdtool fetch 输出为 "<时间戳>: <值>"（$1 自带尾冒号）；必须去掉，
+	# 否则拼出 "ts::v" 双冒号，前端 split(':') 得 3 段而整体丢弃（实测
+	# 历史点解析数恒为 0 → 图表永空）。-nan（无数据）被正则排除。
 	H=$(/usr/bin/rrdtool fetch "$RRD" AVERAGE -s "NOW-$SPAN" -e NOW 2>/dev/null | \
-		awk '/^[0-9]+:/ { v = $2; if (v ~ /^[0-9.eE+-]+$/) printf "%s:%.1f,", $1, v }')
+		awk '/^[0-9]+:/ { t = $1; sub(/:$/, "", t); v = $2; if (v ~ /^[0-9.eE+-]+$/) printf "%s:%.1f,", t, v }')
 	[ -n "$H" ] && echo "hist=${H%,}"
 fi
 exit 0
@@ -1155,9 +1164,10 @@ uci -q delete luci_statistics.rivwrt_nss
 uci -q set luci_statistics.rivwrt_nss=collectd_exec_input
 uci -q set luci_statistics.rivwrt_nss.cmdline='/usr/libexec/rivwrt/nss-collectd.sh'
 uci -q set luci_statistics.rivwrt_nss.cmduser='nobody'
-# RRD 历史：开启关机备份（平时数据在 /tmp 内存，关机时才落盘一次，护 eMMC）
-uci -q set luci_statistics.collectd_rrdtool.backup='1'
-uci -q set luci_statistics.collectd_rrdtool.RRATimespans='2hour 1day 1week 1month'
+# 注：不修改 collectd_rrdtool 的 backup / RRATimespans ——
+#   两者是【全局】设置，会影响统计页的 cpu/memory 等所有图。用户要求
+#   "统计恢复原样"，故保持上游默认（backup=0、RRATimespans 五档含 1year）。
+#   NSS 历史读的是 2h/12h/1d/1w，默认 RRATimespans 已完整覆盖，无需改动。
 uci -q commit luci_statistics
 # 重启采集使配置生效（首启时 collectd 可能尚未安装完成，失败可忽略）
 [ -x /etc/init.d/luci_statistics ] && /etc/init.d/luci_statistics restart >/dev/null 2>&1

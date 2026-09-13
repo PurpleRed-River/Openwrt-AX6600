@@ -92,8 +92,10 @@ CONFIG_PACKAGE_luci-app-vnstat=y
 
 # 状态历史曲线（CPU/内存/接口流量图表，collectd 常驻约 10MB）
 CONFIG_PACKAGE_luci-app-statistics=y
-# NSS 负载历史采集（exec 插件读 debugfs → RRD，供 NSS 页面与统计页出图）
+# NSS 负载历史采集（exec 插件读 debugfs → RRD，供 NSS 页面出图）
 CONFIG_PACKAGE_collectd-mod-exec=y
+# rrdtool CLI：NSS 页面读 RRD 历史用（luci-app-statistics 亦依赖它，此处显式声明）
+CONFIG_PACKAGE_rrdtool1=y
 
 # NSS 加速管理页（自建包：开关 + 每 Core 负载）
 CONFIG_PACKAGE_luci-app-rivwrt-nss=y
