@@ -54,11 +54,12 @@ apply_sed_to_matches "./feeds/luci/modules/luci-mod-system/" "flash.js" "s/192\\
 apply_sed_to_matches "./feeds/luci/modules/luci-mod-status/" "10_system.js" "s/(\\(luciversion || ''\\))/(\\1) + (' \\/ $WRT_MARK-$WRT_DATE')/g"
 
 # -------------------------------------------------------
-# 无线 SSID/密码（编译期写入生成器模板）
+# 无线 SSID（说明：此处不修改生成器模板）
 # -------------------------------------------------------
 
-WIFI_UC="./package/network/config/wifi-scripts/files/lib/wifi/mac80211.uc"
-[ -f "$WIFI_UC" ] && sed -i "s/ssid='.*'/ssid='$WRT_SSID'/g" $WIFI_UC
+# 原版 mac80211.uc 按频段生成默认 SSID（board.wlan.defaults.ssids[band].ssid，
+# 无定义时回退 'OWRT'）。曾在此处全局 sed 替换为单一 SSID，导致三个频段同名
+# （实测"三频合一"）。现改为：生成器保持原样，分频 SSID 由 init.d 首启设置。
 
 # -------------------------------------------------------
 # 默认 IP / 主机名
@@ -337,14 +338,24 @@ cat > $PKGDIR/root/usr/share/rpcd/acl.d/luci-app-rivwrt-nss.json <<'EOF'
 	"luci-app-rivwrt-nss": {
 		"description": "Grant access to RivWRT NSS control and status",
 		"read": {
-			"ubus": { "service": ["list"] },
+			"ubus": {
+				"service": [ "list" ],
+				"file": [ "exec" ]
+			},
 			"file": {
-				"/usr/libexec/rivwrt/nss-status": ["exec"]
+				"/usr/libexec/rivwrt/nss-status": [ "exec" ],
+				"/etc/init.d/qca-nss-ecm enabled": [ "exec" ]
 			}
 		},
 		"write": {
+			"ubus": {
+				"file": [ "exec" ]
+			},
 			"file": {
-				"/etc/init.d/qca-nss-ecm": ["exec"]
+				"/etc/init.d/qca-nss-ecm start": [ "exec" ],
+				"/etc/init.d/qca-nss-ecm stop": [ "exec" ],
+				"/etc/init.d/qca-nss-ecm enable": [ "exec" ],
+				"/etc/init.d/qca-nss-ecm disable": [ "exec" ]
 			}
 		}
 	}
@@ -478,14 +489,21 @@ cat > $PKGDIR/root/usr/libexec/rivwrt/nss-status <<'EOF'
 #!/bin/sh
 # RivWRT NSS 状态采集：输出 key=value 供 LuCI 页面解析
 echo "ts=$(date +%s)"
-# 服务运行状态（procd 注册）
-if ubus -q call service list 2>/dev/null | grep -q '"qca-nss-ecm"'; then
+# 运行状态：ECM 是【内核模块】——其 init.d 的 start_service() 只做 modprobe ecm，
+# 未调用 procd_open_service，故不会出现在 `ubus call service list` 中。
+# 曾用 ubus 检测 → 永远判为 stopped，页面恒显"已停用"且点按钮无变化。
+# 正确方式：查内核模块是否已加载。
+if lsmod 2>/dev/null | grep -q '^ecm '; then
 	echo "ecm=running"
 else
 	echo "ecm=stopped"
 fi
-# 开机自启状态
-/etc/init.d/qca-nss-ecm enabled 2>/dev/null && echo "autostart=1" || echo "autostart=0"
+# 开机自启状态（rc.common 标准命令，不依赖 procd 注册）
+if /etc/init.d/qca-nss-ecm enabled >/dev/null 2>&1; then
+	echo "autostart=1"
+else
+	echo "autostart=0"
+fi
 # debugfs（NSS 统计所在，未挂载则自动挂）
 # 引擎负载：stats/cpu_load_ubi（实测路径），Core N 块取 Avg 值
 D=/sys/kernel/debug/qca-nss-drv/stats
@@ -527,10 +545,15 @@ start() {
 		IFACE=$(uci -q show wireless | sed -n "s/^\\(wireless\\.[a-z_0-9]*\\)\\.device=.$RADIO.$/\\1/p" | head -1)
 		uci -q set wireless.$RADIO.country='US'
 		uci -q set wireless.$RADIO.txpower='24'
+		# ★ 清除历史遗留的非法射频参数：旧版本曾写入 channel='44'/htmode='HT160'
+		# （HT160 不在合法枚举内：NOHT/HT20/HT40±/VHT*/HE*/EHT*），导致 5G 主 radio
+		# 无法启动。sysupgrade 保留 /etc/config，旧值不会被覆盖，故须显式删除。
+		# 删除后回落驱动自动选择（等价 auto），后续手动设置的不会被再次清除（marker 只跑一次）。
+		uci -q delete wireless.$RADIO.channel
+		uci -q delete wireless.$RADIO.htmode
+		CHANGED=1
 		case "$BAND" in
 			2g)
-				uci -q set wireless.$RADIO.channel='11'
-				uci -q set wireless.$RADIO.htmode='HT20'
 				[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT'
 				CHANGED=1
 				;;
@@ -538,21 +561,9 @@ start() {
 				PHY=$(jsonfilter -i /tmp/.wlan-status.json -e "$RADIO.interfaces[0].ifname" 2>/dev/null | cut -d- -f1)
 				DEVPATH=$(readlink -f /sys/class/ieee80211/$PHY/device 2>/dev/null)
 				case "$DEVPATH" in
-					*pci*)
-						uci -q set wireless.$RADIO.channel='149'
-						uci -q set wireless.$RADIO.htmode='HE80'
-						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.8G'
-						;;
-					*ahb*)
-						uci -q set wireless.$RADIO.channel='44'
-						uci -q set wireless.$RADIO.htmode='HT160'
-						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.2G'
-						;;
-					*)
-						uci -q set wireless.$RADIO.channel='149'
-						uci -q set wireless.$RADIO.htmode='HE80'
-						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5G'
-						;;
+					*pci*) [ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.8G' ;;
+					*ahb*) [ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.2G' ;;
+					*)     [ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5G' ;;
 				esac
 				CHANGED=1
 				;;
