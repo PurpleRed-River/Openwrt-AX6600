@@ -311,6 +311,8 @@ include $(TOPDIR)/feeds/luci/luci.mk
 define Package/$(PKG_NAME)/description
   RivWRT 定制：NSS 硬件加速开关与实时状态（引擎负载/时钟/加速连接数）
 endef
+
+# call BuildPackage - OpenWrt buildroot signature
 EOF
 
 cat > $PKGDIR/root/usr/share/luci/menu.d/luci-app-rivwrt-nss.json <<'EOF'
