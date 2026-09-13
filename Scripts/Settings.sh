@@ -72,8 +72,18 @@ apply_sed_to_matches "./feeds/luci/modules/luci-mod-status/" "10_system.js" "s/(
 
 WIFI_UC="./package/network/config/wifi-scripts/files/lib/wifi/mac80211.uc"
 if [ -f "$WIFI_UC" ]; then
+	# SSID：按频段分名（band_name='2g'；两个 5G 用 radio 编号区分）
 	sed -i "s#^set \${si}\.ssid=.*#set \${si}.ssid='\${defaults?.ssid || ((band_name == '2g') ? '$WRT_SSID' : ((name == 'radio0') ? '$WRT_SSID-5.2G' : '$WRT_SSID-5.8G'))}'#" "$WIFI_UC"
-	echo "RivWRT: per-band SSID injected (2.4G=$WRT_SSID / radio0=$WRT_SSID-5.2G / other5G=$WRT_SSID-5.8G)"
+
+	# 信道与带宽：生成器默认 channel=auto、且 5G 强制 width<=80
+	# （源码：else if (width > 80) width = 80），无法表达 HE160。
+	# 故编译期按频段写死；init.d 运行时再兜底一次（双保险，避免时序问题）。
+	# 取值依据：11/HT20（2.4G 非重叠）、44/HE160（5G-1 游戏，160MHz 主信道）、
+	#           149/HE80（5G-2 影音，非 DFS）。
+	sed -i "s#^set \${s}\.channel=.*#set \${s}.channel='\${((band_name == '2g') ? '11' : ((name == 'radio0') ? '44' : '149'))}'#" "$WIFI_UC"
+	sed -i "s#^set \${s}\.htmode=.*#set \${s}.htmode='\${((band_name == '2g') ? 'HT20' : ((name == 'radio0') ? 'HE160' : 'HE80'))}'#" "$WIFI_UC"
+
+	echo "RivWRT: per-band SSID + channel + htmode injected"
 fi
 
 # -------------------------------------------------------
@@ -923,7 +933,7 @@ chmod +x $PKGDIR/root/usr/libexec/rivwrt/nss-status
 # RivWRT：无线三频固化 init.d 脚本
 # 生成到 base-files 的 init.d + rc.d 链接（固件层启用，首启自动执行一次）
 # 硬件拓扑：radio0(5G ahb) / radio1(2.4G ahb) / radio2(QCN9074 PCIe 5G)
-# 频段分配：radio0=5G-1 游戏(44/HT160)、radio1=2.4G(11/HT20)、radio2=5G-2 影音(149/HE80)
+# 频段分配：radio0=5G-1 游戏(44/HE160)、radio1=2.4G(11/HT20)、radio2=5G-2 影音(149/HE80)
 # 法规：US / 24dBm（ones20250 推荐）
 # -------------------------------------------------------
 
@@ -952,27 +962,33 @@ start() {
 		IFACE=$(uci -q show wireless | sed -n "s/^\\(wireless\\.[a-z_0-9]*\\)\\.device=.$RADIO.$/\\1/p" | head -1)
 		uci -q set wireless.$RADIO.country='US'
 		uci -q set wireless.$RADIO.txpower='24'
-		# ★ 清除历史遗留的非法射频参数：旧版本曾写入 channel='44'/htmode='HT160'
-		# （HT160 不在合法枚举内：NOHT/HT20/HT40±/VHT*/HE*/EHT*），导致 5G 主 radio
-		# 无法启动。sysupgrade 保留 /etc/config，旧值不会被覆盖，故须显式删除。
-		# 删除后回落驱动自动选择（等价 auto），后续手动设置的不会被再次清除（marker 只跑一次）。
-		uci -q delete wireless.$RADIO.channel
-		uci -q delete wireless.$RADIO.htmode
-		CHANGED=1
+		# 射频参数按频段设置（全部非 DFS 主信道，避免 CAC 静默期与雷达避让）。
+		# ★ 教训：曾误用 htmode='HT160' —— 该值不在合法枚举内
+		#   （合法含 160 的仅 VHT160/HE160/EHT160，HT 系列最高 HT40±），
+		#   导致 5G 主 radio 无法启动（"5.2G 挂了"）。此处用 WiFi6 的 HE 系列。
 		case "$BAND" in
 			2g)
+				uci -q set wireless.$RADIO.channel='11'
+				uci -q set wireless.$RADIO.htmode='HT20'
 				[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT'
 				CHANGED=1
 				;;
 			5g)
-				# 两个 5G 按 radio 编号区分（与编译期 mac80211.uc 同一规则）。
-				# 原用 jsonfilter 读 ubus 状态判 ahb/pci —— 首启时序下 ubus 可能
-				# 不可用，且多一层依赖；改为纯配置判断，确定性更强。
+				# 两个 5G 按 radio 编号区分（与编译期 mac80211.uc 同一规则）：
+				#   radio0 = IPQ6010 内建 4x4（游戏段）→ 44 / HE160
+				#   radio2 = QCN9074 PCIe（影音段）  → 149 / HE80
 				case "$RADIO" in
-					radio0) SSID='RivWRT-5.2G' ;;
-					*)      SSID='RivWRT-5.8G' ;;
+					radio0)
+						uci -q set wireless.$RADIO.channel='44'
+						uci -q set wireless.$RADIO.htmode='HE160'
+						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.2G'
+						;;
+					*)
+						uci -q set wireless.$RADIO.channel='149'
+						uci -q set wireless.$RADIO.htmode='HE80'
+						[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.8G'
+						;;
 				esac
-				[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid="$SSID"
 				CHANGED=1
 				;;
 		esac
