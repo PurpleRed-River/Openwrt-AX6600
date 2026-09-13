@@ -83,7 +83,15 @@ if [ -f "$WIFI_UC" ]; then
 	sed -i "s#^set \${s}\.channel=.*#set \${s}.channel='\${((band_name == '2g') ? '11' : ((name == 'radio0') ? '44' : '149'))}'#" "$WIFI_UC"
 	sed -i "s#^set \${s}\.htmode=.*#set \${s}.htmode='\${((band_name == '2g') ? 'HT20' : ((name == 'radio0') ? 'HE160' : 'HE80'))}'#" "$WIFI_UC"
 
-	echo "RivWRT: per-band SSID + channel + htmode injected"
+	# 国家码：生成器默认 'CN'（board.wlan.defaults 在本设备无定义 → 回落）。
+	# ★ 必须编译期设定：ath11k 对【运行时】切换国家码脆弱 —— 实测 dmesg 报
+	#   WARNING at net/wireless/reg.c:4035 reg_get_max_bandwidth [cfg80211]
+	#   Call trace: ath11k_regd_update → regulatory_set_wiphy_regd
+	#   → ath11k_pci: failed to perform regd update : -22
+	#   （init.d 里 uci set country 再 wifi reload 即触发该热切换）
+	sed -i "s#^set \${s}\.country=.*#set \${s}.country='US'#" "$WIFI_UC"
+
+	echo "RivWRT: per-band SSID + channel + htmode + country(US) injected"
 fi
 
 # -------------------------------------------------------
@@ -960,8 +968,11 @@ start() {
 	for RADIO in $(uci -q show wireless | sed -n "s/^\\(wireless\\.radio[0-9]*\\)\\.type=.*/\\1/p"); do
 		BAND=$(uci -q get wireless.$RADIO.band)
 		IFACE=$(uci -q show wireless | sed -n "s/^\\(wireless\\.[a-z_0-9]*\\)\\.device=.$RADIO.$/\\1/p" | head -1)
-		uci -q set wireless.$RADIO.country='US'
 		uci -q set wireless.$RADIO.txpower='24'
+		# ★ 不在此设置 country：ath11k 对运行时国家码切换（regd update）脆弱，
+		#   uci set country + wifi reload 会触发 cfg80211 内核 WARNING（实测
+		#   reg.c:4035 reg_get_max_bandwidth）并伴随 regd update -22 失败。
+		#   country 已由编译期写入 mac80211.uc（'US'），radio 首启即带正确值。
 		# 射频参数按频段设置（全部非 DFS 主信道，避免 CAC 静默期与雷达避让）。
 		# ★ 教训：曾误用 htmode='HT160' —— 该值不在合法枚举内
 		#   （合法含 160 的仅 VHT160/HE160/EHT160，HT 系列最高 HT40±），
