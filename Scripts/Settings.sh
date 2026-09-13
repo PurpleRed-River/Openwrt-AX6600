@@ -405,7 +405,9 @@ cat > $PKGDIR/root/usr/share/rpcd/acl.d/luci-app-rivwrt-nss.json <<'EOF'
 				"/usr/libexec/rivwrt/nss-status 2h": [ "exec" ],
 				"/usr/libexec/rivwrt/nss-status 12h": [ "exec" ],
 				"/usr/libexec/rivwrt/nss-status 1d": [ "exec" ],
-				"/usr/libexec/rivwrt/nss-status 1w": [ "exec" ]
+				"/usr/libexec/rivwrt/nss-status 1w": [ "exec" ],
+				"/usr/bin/nss_freq mid": [ "exec" ],
+				"/usr/bin/nss_freq high": [ "exec" ]
 			}
 		}
 	}
@@ -555,13 +557,11 @@ var CSS = [
 '.rw-ctl-txt{text-align:right;min-width:8.5em}',
 '.rw-ctl-txt b{display:block;font-size:13.5px;font-weight:700}',
 '.rw-ctl-txt span{display:block;font-size:12px;color:var(--text-muted,#5f666d);margin-top:2px}',
-'.rw-tgl{position:relative;width:58px;height:33px;border-radius:999px;cursor:pointer;appearance:none;border:1px solid var(--hairline,rgba(18,26,34,.13));background:var(--surface-sunken,#f4f7fa);transition:.22s;flex-shrink:0;padding:0}',
-'.rw-tgl:after{content:"";position:absolute;top:3px;left:3px;width:25px;height:25px;border-radius:50%;background:var(--surface,#fff);box-shadow:var(--app-shadow-sm,0 1px 3px rgba(0,0,0,.06));transition:.22s cubic-bezier(.4,0,.2,1)}',
-'.rw-tgl[aria-checked=true]{background:var(--brand,#0085b5);border-color:var(--brand,#0085b5)}',
-'.rw-tgl[aria-checked=true]:after{transform:translateX(25px)}',
-'.rw-tgl.rw-sm{width:50px;height:29px}',
-'.rw-tgl.rw-sm:after{width:21px;height:21px}',
-'.rw-tgl.rw-sm[aria-checked=true]:after{transform:translateX(21px)}',
+/* 开关一律使用 LuCI 标准组件 ui.Checkbox（生成 .cbi-checkbox），
+   外观由主题决定 —— 不自定义控件样式，避免与主题冲突。
+   此处仅调整其在卡片内的对齐。 */
+'.rw-sw{display:flex;align-items:center;gap:12px}',
+'.rw-sw .cbi-checkbox{margin:0}',
 '.rw-chart{background:var(--surface,#fff);border:1px solid var(--hairline,rgba(18,26,34,.13));border-radius:calc(var(--radius-base,.5rem)*2);box-shadow:var(--app-shadow-md,0 4px 16px rgba(0,0,0,.08));padding:20px 24px 14px;margin-top:20px}',
 '.rw-ch-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap}',
 '.rw-ch-head h2{font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-subtle,#7f858b);margin:0}',
@@ -617,18 +617,19 @@ return view.extend({
 			this.tagEl
 		]);
 
-		/* ── 主控卡：硬件加速开关 ── */
-		this.swRun = E('button', {
-			'class': 'rw-tgl', 'role': 'switch', 'aria-checked': 'false', 'aria-label': _('硬件加速开关'),
-			'click': ui.createHandlerFn(this, function () { return this.toggleRun(); })
-		});
+		/* ── 主控卡：硬件加速开关 ──
+		   开关一律用 LuCI 标准组件 ui.Checkbox（渲染 .cbi-checkbox），
+		   外观交给主题，不自造控件。 */
+		this.cbRun = new ui.Checkbox('1', { 'id': 'rw-cb-run' });
+		var runNode = this.cbRun.render();
+		runNode.addEventListener('widget-change', L.bind(function () { this.toggleRun(); }, this));
 		this.lbRun = E('span');
 		this.descEl = E('p', { 'class': 'rw-desc' });
 		var hero = E('section', { 'class': 'rw-hero' }, [
 			E('div', { 'class': 'rw-hero-info' }, [ E('h2', {}, _('引擎控制')), this.descEl ]),
 			E('div', { 'class': 'rw-ctl' }, [
 				E('span', { 'class': 'rw-ctl-txt' }, [ E('b', {}, _('硬件加速')), this.lbRun ]),
-				this.swRun
+				E('div', { 'class': 'rw-sw' }, [ runNode ])
 			])
 		]);
 
@@ -663,21 +664,30 @@ return view.extend({
 			E('div', { 'class': 'rw-ch-foot' }, [ this.footEl, E('span', {}, _('RRD 历史 · tmpfs')) ])
 		]);
 
-		/* ── KPI：频率 / 调频模式 / 开机自启开关 ── */
+		/* ── KPI：频率 / 频率档位 / 开机自启 ──
+		   「调频模式(Auto/Fixed)」不再展示：上游 nss_freq 只提供 mid/high
+		   两个锁频档，不提供 Auto/Fixed 切换，展示不可操作的项会误导。 */
 		this.freqEl = E('span', {}, '—');
-		this.modeEl = E('span', {}, '—');
-		this.swAuto = E('button', {
-			'class': 'rw-tgl rw-sm', 'role': 'switch', 'aria-checked': 'false', 'aria-label': _('开机自启开关'),
-			'click': ui.createHandlerFn(this, function () { return this.toggleAuto(); })
-		});
+
+		/* 频率档位：勾选 = high（1497.6MHz），不勾 = mid（748.8MHz）。
+		   走上游自带的 /usr/bin/nss_freq（同时写 proc 与 UCI，重启仍生效）。 */
+		this.cbLevel = new ui.Checkbox('1', { 'id': 'rw-cb-level' });
+		var levelNode = this.cbLevel.render();
+		levelNode.addEventListener('widget-change', L.bind(function () { this.toggleLevel(); }, this));
+		this.lbLevel = E('span', { 'class': 'rw-lb' });
+
+		this.cbAuto = new ui.Checkbox('1', { 'id': 'rw-cb-auto' });
+		var autoNode = this.cbAuto.render();
+		autoNode.addEventListener('widget-change', L.bind(function () { this.toggleAuto(); }, this));
 		this.lbAuto = E('span', { 'class': 'rw-lb' });
+
 		var kpis = E('section', { 'class': 'rw-kpis' }, [
 			E('div', { 'class': 'rw-kpi' }, [ E('em', {}, _('NSS 频率')),
 				E('div', { 'class': 'rw-v' }, [ this.freqEl, E('u', {}, 'MHz') ]) ]),
-			E('div', { 'class': 'rw-kpi' }, [ E('em', {}, _('调频模式')),
-				E('div', { 'class': 'rw-v' }, [ this.modeEl ]) ]),
+			E('div', { 'class': 'rw-kpi rw-row' }, [ E('em', {}, _('高频模式')),
+				E('div', { 'class': 'rw-sw' }, [ this.lbLevel, levelNode ]) ]),
 			E('div', { 'class': 'rw-kpi rw-row' }, [ E('em', {}, _('开机自启')),
-				E('div', { 'class': 'rw-mini' }, [ this.lbAuto, this.swAuto ]) ])
+				E('div', { 'class': 'rw-sw' }, [ this.lbAuto, autoNode ]) ])
 		]);
 
 		var note = E('p', { 'class': 'rw-note' }, _('停用 NSS 后直连流量回退内核软转发，bandix 的统计会变准确（NSS 加速的流量不计入其统计），但吞吐下降。防火墙页的「路由 / NAT 卸载」请保持「无」——NSS 独立工作，软件卸载会与之冲突。'));
@@ -717,17 +727,20 @@ return view.extend({
 		this.tagEl.setAttribute('data-s', on ? 'run' : 'stop');
 		this.tagTxt.textContent = on ? _('运行中') : _('已停用');
 
-		this.swRun.setAttribute('aria-checked', on ? 'true' : 'false');
+		this.cbRun.setValue(on ? '1' : '0');
 		this.lbRun.textContent = on ? _('已启用') : _('已停用');
 		this.descEl.textContent = on
 			? _('当前由硬件加速转发。停用后流量回退内核软转发，bandix 流量统计会变得更准确，但吞吐下降。')
 			: _('当前为内核软转发。bandix 统计准确，但吞吐低于硬件加速路径。启用后直连流量将由 NSS 接管。');
 
-		this.swAuto.setAttribute('aria-checked', auto ? 'true' : 'false');
+		var hi = (st.freqlevel === 'high');
+		this.cbLevel.setValue(hi ? '1' : '0');
+		this.lbLevel.textContent = hi ? _('1497.6 MHz') : _('748.8 MHz');
+
+		this.cbAuto.setValue(auto ? '1' : '0');
 		this.lbAuto.textContent = auto ? _('已启用') : _('已关闭');
 
 		this.freqEl.textContent = st.freq || '—';
-		this.modeEl.textContent = st.freqmode || '—';
 
 		var lv = this.live();
 		this.nowEl.textContent = (lv === null) ? '—' : lv.toFixed(1);
@@ -871,13 +884,34 @@ return view.extend({
 	},
 
 	/* 开关动作 */
+	/* 以下动作由 ui.Checkbox 的 widget-change 触发 —— 此时控件已切换，
+	   故依据【控件新值】决定要执行的动作（而非旧状态），避免状态不同步。 */
 	toggleRun: function () {
-		var self = this, on = (this.st.ecm === 'running');
-		return control(on ? 'stop' : 'start').then(function () { return self.refresh(); });
+		var self = this;
+		return control(this.cbRun.isChecked() ? 'start' : 'stop')
+			.then(function () { return self.refresh(); });
 	},
 	toggleAuto: function () {
-		var self = this, on = (this.st.autostart === '1');
-		return control(on ? 'disable' : 'enable').then(function () { return self.refresh(); });
+		var self = this;
+		return control(this.cbAuto.isChecked() ? 'enable' : 'disable')
+			.then(function () { return self.refresh(); });
+	},
+	/* 频率档位：走上游 /usr/bin/nss_freq（写 proc 并保存 UCI，重启保持）。
+	   mid = 748.8MHz（上游默认）／ high = 1497.6MHz。 */
+	toggleLevel: function () {
+		var self = this;
+		var lv = this.cbLevel.isChecked() ? 'high' : 'mid';
+
+		return callExec('/usr/bin/nss_freq', [ lv ]).then(function (res) {
+			if (!res || res.code !== 0) {
+				var detail = (res && res.stderr ? String(res.stderr).trim() : '') || _('无输出');
+				notifyError(_('切换频率档位失败（退出码 %s）：%s').format(
+					(res && res.code !== undefined) ? res.code : '?', detail));
+			}
+			return self.refresh();
+		}).catch(function (err) {
+			notifyError(_('切换频率档位出错：%s').format(err && err.message ? err.message : err));
+		});
 	},
 
 	refresh: function () {
@@ -932,6 +966,10 @@ if [ "$(cat /proc/sys/dev/nss/clock/auto_scale 2>/dev/null)" = "1" ]; then
 else
 	echo "freqmode=Fixed"
 fi
+
+# ── 频率档位（上游 nss_freq 能力：mid=748.8MHz / high=1497.6MHz）──
+# 上游把档位存在 UCI nss_freq.settings.level，由 /etc/init.d/nss_freq 开机应用。
+echo "freqlevel=$(uci -q get nss_freq.settings.level || echo mid)"
 
 # ── 实时负载（debugfs cpu_load_ubi，取 Avg 列）──
 D=/sys/kernel/debug/qca-nss-drv/stats
