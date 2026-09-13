@@ -72,6 +72,18 @@ echo "CONFIG_PACKAGE_luci=y" >> ./.config
 echo "CONFIG_LUCI_LANG_zh_Hans=y" >> ./.config
 
 # -------------------------------------------------------
+# RivWRT 增量配置兜底拼接（不依赖 workflow 层的 WRT_EXTRA_CONFIG）
+# 实测 6dfacd3 固件：VERSION_DIST 与 rivwrt-nss 行均未生效，而同在
+# 基座 GENERAL_AX6600.txt 的 qca-nss-ecm 生效 → 疑似增量文件未被拼接。
+# 这里无条件再拼一次（kconfig 对重复行取最后值，幂等安全）。
+# -------------------------------------------------------
+RIVWRT_CFG="$GITHUB_WORKSPACE/Config/GENERAL_AX6600_RIVWRT.txt"
+if [ -f "$RIVWRT_CFG" ]; then
+	cat "$RIVWRT_CFG" >> ./.config
+	echo "RivWRT: increment config appended (fallback, $(grep -c '^CONFIG' "$RIVWRT_CFG") lines)"
+fi
+
+# -------------------------------------------------------
 # 高通平台 DTS 调整
 # -------------------------------------------------------
 
@@ -498,7 +510,6 @@ WIFI_INIT="./package/base-files/files/etc/init.d/rivwrt-wifi"
 cat > "$WIFI_INIT" <<'RIVWRT_WIFI'
 #!/bin/sh /etc/rc.common
 START=99
-USE_PROCD=0
 MARKER=/etc/.rivwrt-wifi-named
 start_service() {
 	[ -f "$MARKER" ] && return 0
