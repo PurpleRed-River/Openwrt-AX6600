@@ -54,12 +54,27 @@ apply_sed_to_matches "./feeds/luci/modules/luci-mod-system/" "flash.js" "s/192\\
 apply_sed_to_matches "./feeds/luci/modules/luci-mod-status/" "10_system.js" "s/(\\(luciversion || ''\\))/(\\1) + (' \\/ $WRT_MARK-$WRT_DATE')/g"
 
 # -------------------------------------------------------
-# 无线 SSID（说明：此处不修改生成器模板）
+# 无线 SSID：编译期按频段写入生成器模板（三频分开命名）
 # -------------------------------------------------------
+# 原版 mac80211.uc 第 112 行：
+#     set ${si}.ssid='${defaults?.ssid || 'OWRT'}'
+# board.wlan.defaults 在 jdcloud 设备上无定义 → 回退 'OWRT'（三频同名）。
+#
+# 曾两次走弯路：
+#   ① 全局 sed 把三个频段替换成同一个 SSID → 三频合一
+#   ② 交给 init.d 运行时设置 → /etc/config/wireless 由 netifd 首次启动才生成，
+#      S99 跑在其之前导致空转；且旧版无条件 touch marker → 此后永久不再尝试
+#      （实测：刷完仍全是 OWRT）
+# 故改为编译期直接生成正确 SSID，与运行时无关、必定生效。
+#
+# 设备频段布局（轴线实测）：radio1=2.4G / radio0=5G(ahb,IPQ6010内建) /
+# radio2=5G(QCN9074 PCIe)。模板中 band_name('2g'/'5g') 与 name('radioN') 均可用。
 
-# 原版 mac80211.uc 按频段生成默认 SSID（board.wlan.defaults.ssids[band].ssid，
-# 无定义时回退 'OWRT'）。曾在此处全局 sed 替换为单一 SSID，导致三个频段同名
-# （实测"三频合一"）。现改为：生成器保持原样，分频 SSID 由 init.d 首启设置。
+WIFI_UC="./package/network/config/wifi-scripts/files/lib/wifi/mac80211.uc"
+if [ -f "$WIFI_UC" ]; then
+	sed -i "s#^set \${si}\.ssid=.*#set \${si}.ssid='\${defaults?.ssid || ((band_name == '2g') ? '$WRT_SSID' : ((name == 'radio0') ? '$WRT_SSID-5.2G' : '$WRT_SSID-5.8G'))}'#" "$WIFI_UC"
+	echo "RivWRT: per-band SSID injected (2.4G=$WRT_SSID / radio0=$WRT_SSID-5.2G / other5G=$WRT_SSID-5.8G)"
+fi
 
 # -------------------------------------------------------
 # 默认 IP / 主机名
@@ -356,6 +371,12 @@ cat > $PKGDIR/root/usr/share/rpcd/acl.d/luci-app-rivwrt-nss.json <<'EOF'
 				"file": [ "exec" ]
 			},
 			"file": {
+				"/usr/libexec/rivwrt/nss-status": [ "exec" ],
+				"/usr/libexec/rivwrt/nss-status 2h": [ "exec" ],
+				"/usr/libexec/rivwrt/nss-status 12h": [ "exec" ],
+				"/usr/libexec/rivwrt/nss-status 1d": [ "exec" ],
+				"/usr/libexec/rivwrt/nss-status 1w": [ "exec" ],
+				"/etc/init.d/qca-nss-ecm enabled": [ "exec" ],
 				"/etc/init.d/qca-nss-ecm start": [ "exec" ],
 				"/etc/init.d/qca-nss-ecm stop": [ "exec" ],
 				"/etc/init.d/qca-nss-ecm enable": [ "exec" ],
@@ -383,10 +404,11 @@ var NS = 'http://www.w3.org/2000/svg';
 var RANGES = { '2h': '2 小时', '12h': '12 小时', '1d': '1 天', '1w': '1 周' };
 var LABEL = { '2h': '30s 采样', '12h': '2.5min 聚合', '1d': '5min 聚合', '1w': '30min 聚合' };
 
+/* 不设 expect: {code:0}：命令失败时 Promise 会被 reject，错误被 LuCI 吞掉，
+   用户只看到"点击没反应"。改为手动检查 code 并把 stderr 展示出来。 */
 var callExec = rpc.declare({
 	object: 'file', method: 'exec',
-	params: [ 'command', 'params' ],
-	expect: { code: 0 }
+	params: [ 'command', 'params' ]
 });
 
 function sx(tag, attrs) {
@@ -411,8 +433,24 @@ function readStatus(range) {
 	}).catch(function () { return { load: {} }; });
 }
 
+function notifyError(msg) {
+	ui.addNotification(null, E('p', {}, msg), 'error');
+}
+
+/* 执行 qca-nss-ecm 的 init 动作，失败时把退出码与 stderr 显示给用户
+   （原实现错误被静默吞掉，表现为"点击没反应"）。 */
 function control(action) {
-	return callExec('/etc/init.d/qca-nss-ecm', [ action ]);
+	var labels = { start: _('启用'), stop: _('停用'), enable: _('开启自启'), disable: _('关闭自启') };
+	return callExec('/etc/init.d/qca-nss-ecm', [ action ]).then(function (res) {
+		if (!res || res.code !== 0) {
+			var detail = (res && res.stderr ? String(res.stderr).trim() : '') || _('无输出');
+			notifyError(_('%s失败（退出码 %s）：%s').format(
+				labels[action] || action, (res && res.code !== undefined) ? res.code : '?', detail));
+		}
+		return res;
+	}).catch(function (err) {
+		notifyError(_('%s时调用出错：%s').format(labels[action] || action, err && err.message ? err.message : err));
+	});
 }
 
 /* 单调三次插值（Fritsch–Carlson）：平滑且不过冲 0~100 */
@@ -779,6 +817,8 @@ return view.extend({
 			self.parseHist(st);
 			self.apply();
 			self.draw();
+		}).catch(function (err) {
+			notifyError(_('读取历史数据失败：%s').format(err && err.message ? err.message : err));
 		});
 	},
 
@@ -895,12 +935,17 @@ START=99
 MARKER=/etc/.rivwrt-wifi-named
 start() {
 	[ -f "$MARKER" ] && return 0
+	# 等 /etc/config/wireless 生成：该文件由 netifd 首次启动时才写入；若 S99
+	# 跑在其之前，uci 读不到任何 radio。旧版用 ubus 判定 + 无条件 touch marker，
+	# 一旦空转就永久不再重试（实测刷完 SSID 仍是 OWRT）。
+	# 改用 uci 判定（不依赖 ubus），中途主动触发一次配置生成。
 	i=0
-	while [ $i -lt 60 ]; do
-		ubus -q call network.wireless status >/dev/null 2>&1 && break
+	while [ $i -lt 90 ]; do
+		[ -n "$(uci -q get wireless.radio0.band)" ] && break
+		[ $i -eq 20 ] && wifi config >/dev/null 2>&1
 		i=$((i+1)); sleep 2
 	done
-	ubus -q call network.wireless status > /tmp/.wlan-status.json || return 1
+	[ -n "$(uci -q get wireless.radio0.band)" ] || return 1
 	CHANGED=0
 	for RADIO in $(uci -q show wireless | sed -n "s/^\\(wireless\\.radio[0-9]*\\)\\.type=.*/\\1/p"); do
 		BAND=$(uci -q get wireless.$RADIO.band)
@@ -920,13 +965,14 @@ start() {
 				CHANGED=1
 				;;
 			5g)
-				PHY=$(jsonfilter -i /tmp/.wlan-status.json -e "$RADIO.interfaces[0].ifname" 2>/dev/null | cut -d- -f1)
-				DEVPATH=$(readlink -f /sys/class/ieee80211/$PHY/device 2>/dev/null)
-				case "$DEVPATH" in
-					*pci*) [ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.8G' ;;
-					*ahb*) [ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5.2G' ;;
-					*)     [ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid='RivWRT-5G' ;;
+				# 两个 5G 按 radio 编号区分（与编译期 mac80211.uc 同一规则）。
+				# 原用 jsonfilter 读 ubus 状态判 ahb/pci —— 首启时序下 ubus 可能
+				# 不可用，且多一层依赖；改为纯配置判断，确定性更强。
+				case "$RADIO" in
+					radio0) SSID='RivWRT-5.2G' ;;
+					*)      SSID='RivWRT-5.8G' ;;
 				esac
+				[ -n "$IFACE" ] && uci -q set wireless.$IFACE.ssid="$SSID"
 				CHANGED=1
 				;;
 		esac
@@ -939,8 +985,9 @@ start() {
 	if [ "$CHANGED" = "1" ]; then
 		uci commit wireless
 		wifi reload
+		# 仅成功施加配置后才落 marker；失败则下次启动重试
+		touch "$MARKER"
 	fi
-	touch "$MARKER"
 }
 RIVWRT_WIFI
 chmod +x "$WIFI_INIT"
@@ -1010,57 +1057,6 @@ ln -sf ../init.d/rivwrt-nss-stat "./package/base-files/files/etc/rc.d/S25rivwrt-
 # ③ 采集脚本：debugfs → collectd PUTVAL
 NSSCOLLECT="./package/base-files/files/usr/libexec/rivwrt/nss-collectd.sh"
 mkdir -p "$(dirname "$NSSCOLLECT")"
-# -------------------------------------------------------
-# RivWRT：统计页（状态 → 图表）NSS 条目定义
-#
-# luci-app-statistics 的 rrdtool.js 扫描本目录下 *.js 作为图定义（按
-# plugin 名匹配 RRD 文件名，此处 nss-load），与 cpu/memory/interface/
-# iwinfo/load 的定义同目录并存。
-#
-# ★ 刻意【不】自定义配色（无 rrdopts）：
-#   统计页的 PNG 由 rrdtool 生成，而 aurora 主题在暗色下对整张图施加
-#       [data-darkmode] ... [data-plugin] img { filter: hue-rotate(150deg) invert(100%) }
-#   该滤镜统一作用于所有图。若此处单独注入透明背景/品牌色，暗色下会被
-#   反相+色相旋转，颜色失控、且亮色下与其它图的白底+3D边框不一致。
-#   故保持 rrdtool 默认样式，让 6 张图观感完全一致。
-#   仅保留非颜色的语义选项（y 轴范围/数值格式），这些不受滤镜影响。
-# -------------------------------------------------------
-DEFDIR="$PKGDIR/root/www/luci-static/resources/statistics/rrdtool/definitions"
-mkdir -p "$DEFDIR"
-cat > "$DEFDIR/nss-load.js" <<'RIVWRT_NSSDEF'
-/* Licensed to the public under the Apache License 2.0. */
-'use strict';
-'require baseclass';
-
-return baseclass.extend({
-	title: _('NSS Core Load'),
-
-	rrdargs: function(graph, host, plugin, plugin_instance, dtype) {
-		return {
-			title: "%H: NSS Core Load",
-			vlabel: "%",
-			y_min: "0",
-			y_max: "100",
-			number_format: "%5.1lf",
-			data: {
-				sources: {
-					gauge: [ "core0" ]
-				},
-				options: {
-					gauge__core0: {
-						color: "00a0e0",
-						title: "NSS Core 0",
-						noarea: false,
-						overlay: true,
-						weight: 1
-					}
-				}
-			}
-		};
-	}
-});
-RIVWRT_NSSDEF
-
 cat > "$NSSCOLLECT" <<'RIVWRT_NSSCOLLECT'
 #!/bin/sh
 # 采集 NSS 核心负载，输出 collectd exec 协议（PUTVAL）。
