@@ -134,7 +134,7 @@ BANNER="./package/base-files/files/etc/banner"
  =======================================================
    RivWRT - based on ones20250/Openwrt-AX6600
    aurora / athena-led / bandix-plus / daede / nss
-   RivWRT %V, %C
+   ImmortalWrt %V, %C
  =======================================================
 RIVWRT_BANNER
 
