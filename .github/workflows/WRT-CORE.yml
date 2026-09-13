@@ -45,6 +45,11 @@ on:
         required: false
         type: string
 
+#CI权限（最小化：Release 发布 + 缓存/产物写权限）
+permissions:
+  contents: write   # 创建 Release、上传固件
+  actions: write    # 缓存读写、Artifact 上传
+
 env:
   GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
   WRT_CONFIG: ${{inputs.WRT_CONFIG}}

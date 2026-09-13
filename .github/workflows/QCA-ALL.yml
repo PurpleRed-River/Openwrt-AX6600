@@ -16,8 +16,10 @@ on:
         required: false
         type: boolean
 
-#CI权限
-permissions: write-all
+#CI权限（最小化：仅发布 Release 与缓存/产物所需的写权限）
+permissions:
+  contents: write   # 创建 Release、上传固件
+  actions: write    # 缓存读写、Artifact 上传
 
 #CI任务
 jobs:

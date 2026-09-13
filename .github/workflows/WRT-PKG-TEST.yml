@@ -11,8 +11,9 @@ on:
         required: true
         type: string
 
-#CI权限
-permissions: write-all
+#CI权限（最小化：只克隆源码与编译，不上传任何产物，只读即可）
+permissions:
+  contents: read
 
 #CI任务
 jobs:

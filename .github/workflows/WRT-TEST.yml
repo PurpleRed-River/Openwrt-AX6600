@@ -41,8 +41,10 @@ on:
         required: true
         type: boolean
 
-#CI权限
-permissions: write-all
+#CI权限（最小化：TEST=true 时只读；保留写权限以支持 TEST=false 完整编译）
+permissions:
+  contents: write   # TEST=false 时创建 Release
+  actions: write    # 缓存读写、Artifact 上传
 
 #CI任务
 jobs:

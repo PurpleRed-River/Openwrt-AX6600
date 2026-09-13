@@ -7,7 +7,9 @@ on:
   #手动清理
   workflow_dispatch:
 
-permissions: write-all
+permissions:
+  contents: write   # 删除旧 Release 与 tag
+  actions: write    # 删除旧 workflow run
 
 jobs:
   auto_clean:
