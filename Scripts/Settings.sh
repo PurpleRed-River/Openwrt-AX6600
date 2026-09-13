@@ -344,6 +344,10 @@ cat > $PKGDIR/root/usr/share/rpcd/acl.d/luci-app-rivwrt-nss.json <<'EOF'
 			},
 			"file": {
 				"/usr/libexec/rivwrt/nss-status": [ "exec" ],
+				"/usr/libexec/rivwrt/nss-status 2h": [ "exec" ],
+				"/usr/libexec/rivwrt/nss-status 12h": [ "exec" ],
+				"/usr/libexec/rivwrt/nss-status 1d": [ "exec" ],
+				"/usr/libexec/rivwrt/nss-status 1w": [ "exec" ],
 				"/etc/init.d/qca-nss-ecm enabled": [ "exec" ]
 			}
 		},
@@ -370,111 +374,431 @@ cat > $PKGDIR/root/www/luci-static/resources/view/rivwrt/nss.js <<'EOF'
 'require dom';
 'require ui';
 
+/* RivWRT NSS 加速：开关 + 负载历史图
+   数据源：/usr/libexec/rivwrt/nss-status（debugfs 实时 + RRD 历史）
+   控制：/etc/init.d/qca-nss-ecm start|stop|enable|disable
+   样式沿用 aurora 主题 token（var(--brand) 等，附 sRGB 回退值） */
+
+var NS = 'http://www.w3.org/2000/svg';
+var RANGES = { '2h': '2 小时', '12h': '12 小时', '1d': '1 天', '1w': '1 周' };
+var LABEL = { '2h': '30s 采样', '12h': '2.5min 聚合', '1d': '5min 聚合', '1w': '30min 聚合' };
+
 var callExec = rpc.declare({
-	object: 'file',
-	method: 'exec',
+	object: 'file', method: 'exec',
 	params: [ 'command', 'params' ],
 	expect: { code: 0 }
 });
 
-function readStatus() {
-	return callExec('/usr/libexec/rivwrt/nss-status', []).then(function (res) {
-		var out = {};
+function sx(tag, attrs) {
+	var e = document.createElementNS(NS, tag);
+	for (var k in (attrs || {}))
+		e.setAttribute(k, attrs[k]);
+	return e;
+}
+
+function readStatus(range) {
+	return callExec('/usr/libexec/rivwrt/nss-status', [ range || '2h' ]).then(function (res) {
+		var out = { load: {} };
 		(res.stdout || '').split('\n').forEach(function (line) {
 			var m = line.match(/^([a-z_0-9]+)=(.*)$/);
-			if (m) out[m[1]] = m[2];
+			if (!m) return;
+			if (m[1].indexOf('load_') === 0)
+				out.load[m[1].substring(5)] = m[2];
+			else
+				out[m[1]] = m[2];
 		});
 		return out;
-	}).catch(function () { return {}; });
+	}).catch(function () { return { load: {} }; });
 }
 
 function control(action) {
 	return callExec('/etc/init.d/qca-nss-ecm', [ action ]);
 }
 
+/* 单调三次插值（Fritsch–Carlson）：平滑且不过冲 0~100 */
+function monotone(xs, ys) {
+	var n = xs.length, i;
+	if (n < 2) return '';
+	var dx = [], dy = [], m = [];
+	for (i = 0; i < n - 1; i++) {
+		dx[i] = xs[i + 1] - xs[i];
+		dy[i] = ys[i + 1] - ys[i];
+		m[i] = dx[i] ? dy[i] / dx[i] : 0;
+	}
+	var t = new Array(n);
+	t[0] = m[0]; t[n - 1] = m[n - 2];
+	for (i = 1; i < n - 1; i++) {
+		if (m[i - 1] * m[i] <= 0) t[i] = 0;
+		else {
+			var w1 = 2 * dx[i] + dx[i - 1], w2 = dx[i] + 2 * dx[i - 1];
+			t[i] = (w1 + w2) / (w1 / m[i - 1] + w2 / m[i]);
+		}
+	}
+	var d = 'M' + xs[0].toFixed(2) + ',' + ys[0].toFixed(2);
+	for (i = 0; i < n - 1; i++) {
+		var x1 = xs[i] + dx[i] / 3, y1 = ys[i] + t[i] * dx[i] / 3;
+		var x2 = xs[i + 1] - dx[i] / 3, y2 = ys[i + 1] - t[i + 1] * dx[i] / 3;
+		d += ' C' + x1.toFixed(2) + ',' + y1.toFixed(2) + ' ' + x2.toFixed(2) + ',' + y2.toFixed(2) +
+			' ' + xs[i + 1].toFixed(2) + ',' + ys[i + 1].toFixed(2);
+	}
+	return d;
+}
+
+function fmtTime(ts, range) {
+	var d = new Date(ts * 1000);
+	function z(x) { return (x < 10 ? '0' : '') + x; }
+	if (range === '1w' || range === '1d')
+		return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + z(d.getHours()) + ':' + z(d.getMinutes());
+	return z(d.getHours()) + ':' + z(d.getMinutes()) + ':' + z(d.getSeconds());
+}
+
+var CSS = [
+'.rw-root{max-width:74rem}',
+'.rw-hd{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:22px}',
+'.rw-hd h1{font-size:22px;font-weight:700;letter-spacing:-.02em;margin:0}',
+'.rw-hd p{font-size:13.5px;color:var(--text-muted,#5f666d);margin:6px 0 0;line-height:1.6}',
+'.rw-tag{display:inline-flex;align-items:center;gap:8px;padding:6px 13px;border-radius:999px;font-size:12.5px;font-weight:600;border:1px solid var(--hairline,rgba(18,26,34,.13));background:var(--surface,#fff);box-shadow:var(--app-shadow-sm,0 1px 3px rgba(0,0,0,.06))}',
+'.rw-tag i{width:7px;height:7px;border-radius:50%;background:var(--text-subtle,#7f858b);flex-shrink:0;display:block}',
+'.rw-tag[data-s=run]{color:var(--success,#004f3e);border-color:color-mix(in oklab,var(--success,#004f3e) 30%,var(--hairline,rgba(18,26,34,.13)));background:var(--success-surface,#eefaf5)}',
+'.rw-tag[data-s=run] i{background:var(--success,#004f3e)}',
+'.rw-tag[data-s=stop]{color:var(--danger,#8d1925);border-color:color-mix(in oklab,var(--danger,#8d1925) 30%,var(--hairline,rgba(18,26,34,.13)));background:var(--danger-surface,#fdeef0)}',
+'.rw-tag[data-s=stop] i{background:var(--danger,#8d1925)}',
+'.rw-hero{display:flex;align-items:center;justify-content:space-between;gap:28px;flex-wrap:wrap;background:var(--surface,#fff);border:1px solid var(--hairline,rgba(18,26,34,.13));border-radius:calc(var(--radius-base,.5rem)*2);box-shadow:var(--app-shadow-md,0 4px 16px rgba(0,0,0,.08));padding:24px 26px}',
+'.rw-hero-info{flex:1 1 20rem;min-width:min(100%,24ch)}',
+'.rw-hero h2{font-size:16.5px;font-weight:700;letter-spacing:-.015em;margin:0}',
+'.rw-desc{font-size:13.5px;color:var(--text-muted,#5f666d);margin:8px 0 0;line-height:1.65;max-width:52ch}',
+'.rw-ctl{display:flex;align-items:center;gap:14px;flex-shrink:0}',
+'.rw-ctl-txt{text-align:right;min-width:8.5em}',
+'.rw-ctl-txt b{display:block;font-size:13.5px;font-weight:700}',
+'.rw-ctl-txt span{display:block;font-size:12px;color:var(--text-muted,#5f666d);margin-top:2px}',
+'.rw-tgl{position:relative;width:58px;height:33px;border-radius:999px;cursor:pointer;appearance:none;border:1px solid var(--hairline,rgba(18,26,34,.13));background:var(--surface-sunken,#f4f7fa);transition:.22s;flex-shrink:0;padding:0}',
+'.rw-tgl:after{content:"";position:absolute;top:3px;left:3px;width:25px;height:25px;border-radius:50%;background:var(--surface,#fff);box-shadow:var(--app-shadow-sm,0 1px 3px rgba(0,0,0,.06));transition:.22s cubic-bezier(.4,0,.2,1)}',
+'.rw-tgl[aria-checked=true]{background:var(--brand,#0085b5);border-color:var(--brand,#0085b5)}',
+'.rw-tgl[aria-checked=true]:after{transform:translateX(25px)}',
+'.rw-tgl.rw-sm{width:50px;height:29px}',
+'.rw-tgl.rw-sm:after{width:21px;height:21px}',
+'.rw-tgl.rw-sm[aria-checked=true]:after{transform:translateX(21px)}',
+'.rw-chart{background:var(--surface,#fff);border:1px solid var(--hairline,rgba(18,26,34,.13));border-radius:calc(var(--radius-base,.5rem)*2);box-shadow:var(--app-shadow-md,0 4px 16px rgba(0,0,0,.08));padding:20px 24px 14px;margin-top:20px}',
+'.rw-ch-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap}',
+'.rw-ch-head h2{font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-subtle,#7f858b);margin:0}',
+'.rw-ch-val{display:flex;align-items:baseline;gap:6px;margin-top:7px}',
+'.rw-ch-val b{font-family:var(--font-mono,monospace);font-size:34px;font-weight:500;letter-spacing:-.045em;line-height:1}',
+'.rw-ch-val u{text-decoration:none;font-size:15px;color:var(--text-muted,#5f666d);font-weight:600}',
+'.rw-ch-val span{font-size:12px;color:var(--text-subtle,#7f858b);margin-left:5px}',
+'.rw-seg{display:inline-flex;padding:3px;gap:2px;border:1px solid var(--hairline,rgba(18,26,34,.13));border-radius:calc(var(--radius-base,.5rem)*.875);background:var(--surface-sunken,#f4f7fa)}',
+'.rw-seg button{font:inherit;font-size:12.5px;font-weight:600;padding:6px 13px;border:0;cursor:pointer;background:transparent;color:var(--text-muted,#5f666d);border-radius:calc(var(--radius-base,.5rem)*.625);transition:.14s}',
+'.rw-seg button:hover{color:var(--text,#121a22)}',
+'.rw-seg button[aria-selected=true]{background:var(--surface,#fff);color:var(--brand,#0085b5);box-shadow:var(--app-shadow-sm,0 1px 3px rgba(0,0,0,.06))}',
+'.rw-wrap{position:relative;margin-top:14px}',
+'.rw-svg{display:block;width:100%;height:238px;overflow:visible}',
+'.rw-tip{position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .12s;background:var(--surface,#fff);border:1px solid var(--hairline,rgba(18,26,34,.13));border-radius:var(--radius-base,.5rem);box-shadow:var(--app-shadow-md,0 4px 16px rgba(0,0,0,.08));padding:8px 11px;white-space:nowrap;z-index:3}',
+'.rw-tip.on{opacity:1}',
+'.rw-tip-t{display:block;font-family:var(--font-mono,monospace);font-size:10.5px;color:var(--text-subtle,#7f858b)}',
+'.rw-tip-v{display:block;font-family:var(--font-mono,monospace);font-size:15px;font-weight:600;margin-top:3px}',
+'.rw-ch-foot{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-top:12px;padding-top:11px;border-top:1px solid var(--hairline,rgba(18,26,34,.13));font-family:var(--font-mono,monospace);font-size:11px;color:var(--text-subtle,#7f858b)}',
+'.rw-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;margin-top:20px}',
+'.rw-kpi{background:var(--surface,#fff);border:1px solid var(--hairline,rgba(18,26,34,.13));border-radius:calc(var(--radius-base,.5rem)*1.5);box-shadow:var(--app-shadow-sm,0 1px 3px rgba(0,0,0,.06));padding:18px 20px}',
+'.rw-kpi em{display:block;font-style:normal;font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-subtle,#7f858b);margin-bottom:10px}',
+'.rw-v{font-family:var(--font-mono,monospace);font-size:23px;font-weight:500;letter-spacing:-.03em;display:flex;align-items:baseline;gap:3px}',
+'.rw-v u{text-decoration:none;font-size:12.5px;color:var(--text-muted,#5f666d);font-weight:400}',
+'.rw-kpi.rw-row{display:flex;align-items:center;justify-content:space-between;gap:14px}',
+'.rw-kpi.rw-row em{margin-bottom:0}',
+'.rw-mini{display:flex;align-items:center;gap:11px}',
+'.rw-lb{font-size:12.5px;font-weight:600;color:var(--text-muted,#5f666d)}',
+'.rw-note{margin-top:20px;font-size:12.5px;color:var(--text-subtle,#7f858b);line-height:1.75;max-width:80ch}',
+'.rw-empty{font-size:12.5px;color:var(--text-subtle,#7f858b);padding:28px 0;text-align:center}',
+'@media(max-width:720px){.rw-hero{flex-direction:column;align-items:stretch}.rw-ctl{justify-content:space-between}.rw-ctl-txt{text-align:left}}'
+].join('\n');
+
 return view.extend({
 	load: function () {
-		return readStatus();
+		return readStatus('2h');
 	},
 
 	render: function (st) {
 		var self = this;
-		this.table = E('table', { 'class': 'table' });
+		this.st = st || { load: {} };
+		this.range = '2h';
+		this.parseHist(this.st);
 
-		var body = E([
-			E('h2', _('NSS 硬件加速')),
-			E('p', { 'style': 'margin-bottom:1em' },
-				_('qca-nss-ecm 硬件加速引擎状态与开关。停用后流量回退内核软转发（bandix 统计将变准确，吞吐下降）；启用后直连流量由 NSS 硬件加速。防火墙页的路由/NAT卸载选项请保持“无”。')),
-			E('div', { 'class': 'cbi-section' },
-				E('div', { 'class': 'cbi-section-node' }, this.table)),
-			E('div', { 'class': 'cbi-page-actions', 'style': 'margin-top:1em' }, [
-				E('button', {
-					'class': 'btn cbi-button-action',
-					'click': ui.createHandlerFn(this, function () {
-						return control('start').then(function () { return self.refresh(); });
-					})
-				}, _('启用 NSS 加速')),
-				' ',
-				E('button', {
-					'class': 'btn cbi-button-negative',
-					'click': ui.createHandlerFn(this, function () {
-						return control('stop').then(function () { return self.refresh(); });
-					})
-				}, _('停用 NSS 加速')),
-				' ',
-				E('button', {
-					'class': 'btn',
-					'click': ui.createHandlerFn(this, function () {
-						return readStatus().then(function (s) {
-							return control(s.autostart === '1' ? 'disable' : 'enable');
-						}).then(function () { return self.refresh(); });
-					})
-				}, _('切换开机自启'))
+		/* ── 页头 ── */
+		this.tagDot = E('i');
+		this.tagTxt = E('span');
+		this.tagEl = E('span', { 'class': 'rw-tag' }, [ this.tagDot, this.tagTxt ]);
+		var header = E('div', { 'class': 'rw-hd' }, [
+			E('div', {}, [
+				E('h1', {}, _('NSS 硬件加速')),
+				E('p', {}, _('直连流量由 NSS 引擎硬件转发；代理流量交由 dae 内核态接管'))
 			]),
-			E('div', { 'style': 'margin-top:1em;font-size:90%;opacity:.6' },
-				_('状态每 5 秒自动刷新。'))
+			this.tagEl
 		]);
 
-		poll.add(function () { return self.refresh(); }, 5);
-		dom.content(this.table, this.renderRows(st));
-		return body;
+		/* ── 主控卡：硬件加速开关 ── */
+		this.swRun = E('button', {
+			'class': 'rw-tgl', 'role': 'switch', 'aria-checked': 'false', 'aria-label': _('硬件加速开关'),
+			'click': ui.createHandlerFn(this, function () { return this.toggleRun(); })
+		});
+		this.lbRun = E('span');
+		this.descEl = E('p', { 'class': 'rw-desc' });
+		var hero = E('section', { 'class': 'rw-hero' }, [
+			E('div', { 'class': 'rw-hero-info' }, [ E('h2', {}, _('引擎控制')), this.descEl ]),
+			E('div', { 'class': 'rw-ctl' }, [
+				E('span', { 'class': 'rw-ctl-txt' }, [ E('b', {}, _('硬件加速')), this.lbRun ]),
+				this.swRun
+			])
+		]);
+
+		/* ── 图表卡 ── */
+		this.segEl = E('div', { 'class': 'rw-seg' });
+		Object.keys(RANGES).forEach(function (r) {
+			self.segEl.appendChild(E('button', {
+				'data-range': r,
+				'aria-selected': (r === '2h') ? 'true' : 'false',
+				'click': ui.createHandlerFn(self, function () { return self.setRange(r); })
+			}, _(RANGES[r])));
+		});
+
+		this.svg = sx('svg', { 'viewBox': '0 0 940 238', 'preserveAspectRatio': 'none', 'class': 'rw-svg' });
+		this.tipT = E('span', { 'class': 'rw-tip-t' });
+		this.tipV = E('span', { 'class': 'rw-tip-v' });
+		this.tip = E('div', { 'class': 'rw-tip' }, [ this.tipT, this.tipV ]);
+		this.wrap = E('div', { 'class': 'rw-wrap' }, [ this.svg, this.tip ]);
+
+		this.nowEl = E('b', {}, '—');
+		this.nowLbl = E('span', {}, _('当前'));
+		this.footEl = E('span');
+		var chart = E('section', { 'class': 'rw-chart' }, [
+			E('div', { 'class': 'rw-ch-head' }, [
+				E('div', {}, [
+					E('h2', {}, _('NSS 核心负载')),
+					E('div', { 'class': 'rw-ch-val' }, [ this.nowEl, E('u', {}, '%'), this.nowLbl ])
+				]),
+				this.segEl
+			]),
+			this.wrap,
+			E('div', { 'class': 'rw-ch-foot' }, [ this.footEl, E('span', {}, _('RRD 历史 · tmpfs')) ])
+		]);
+
+		/* ── KPI：频率 / 调频模式 / 开机自启开关 ── */
+		this.freqEl = E('span', {}, '—');
+		this.modeEl = E('span', {}, '—');
+		this.swAuto = E('button', {
+			'class': 'rw-tgl rw-sm', 'role': 'switch', 'aria-checked': 'false', 'aria-label': _('开机自启开关'),
+			'click': ui.createHandlerFn(this, function () { return this.toggleAuto(); })
+		});
+		this.lbAuto = E('span', { 'class': 'rw-lb' });
+		var kpis = E('section', { 'class': 'rw-kpis' }, [
+			E('div', { 'class': 'rw-kpi' }, [ E('em', {}, _('NSS 频率')),
+				E('div', { 'class': 'rw-v' }, [ this.freqEl, E('u', {}, 'MHz') ]) ]),
+			E('div', { 'class': 'rw-kpi' }, [ E('em', {}, _('调频模式')),
+				E('div', { 'class': 'rw-v' }, [ this.modeEl ]) ]),
+			E('div', { 'class': 'rw-kpi rw-row' }, [ E('em', {}, _('开机自启')),
+				E('div', { 'class': 'rw-mini' }, [ this.lbAuto, this.swAuto ]) ])
+		]);
+
+		var note = E('p', { 'class': 'rw-note' }, _('停用 NSS 后直连流量回退内核软转发，bandix 的统计会变准确（NSS 加速的流量不计入其统计），但吞吐下降。防火墙页的「路由 / NAT 卸载」请保持「无」——NSS 独立工作，软件卸载会与之冲突。'));
+
+		this.apply();
+		this.draw();
+		this.bindHover();
+
+		poll.add(L.bind(function () { return this.refresh(); }, this), 5);
+
+		return E('div', { 'class': 'rw-root' }, [ E('style', {}, CSS), header, hero, chart, kpis, note ]);
 	},
 
-	renderRows: function (st) {
-		var rows = [];
-		function row(label, value) {
-			rows.push(E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td left', 'width': '33%' }, label),
-				E('td', { 'class': 'td left' }, value)
-			]));
-		}
-		if (st && st.ecm === 'running')
-			row(_('ECM 引擎状态'), E('span', { 'class': 'label label-success' }, _('运行中')));
-		else
-			row(_('ECM 引擎状态'), E('span', { 'class': 'label label-warning' }, _('已停用（软转发）')));
+	parseHist: function (st) {
+		this.hist = [];
+		if (!st || !st.hist) return;
+		st.hist.split(',').forEach(L.bind(function (seg) {
+			var p = seg.split(':');
+			if (p.length !== 2) return;
+			var t = parseInt(p[0], 10), v = parseFloat(p[1]);
+			if (isFinite(t) && isFinite(v))
+				this.hist.push({ t: t, v: Math.max(0, Math.min(100, v)) });
+		}, this));
+	},
 
-		row(_('开机自启'), (st && st.autostart === '1') ? _('是') : _('否'));
+	live: function () {
+		var k = Object.keys(this.st.load || {});
+		return k.length ? parseFloat(this.st.load[k[0]]) : null;
+	},
 
-		if (!st || st.stats === 'unavailable') {
-			row(_('NSS 引擎负载'), _('暂不可用（debugfs 未就绪）'));
-		} else {
-			var cores = Object.keys(st).filter(function (k) { return k.indexOf('load_') === 0; }).sort();
-			if (cores.length === 0) {
-				row(_('NSS 引擎负载'), _('暂无数据'));
-			} else {
-				cores.forEach(function (k) {
-					row(_('NSS 引擎负载 (Core %s)').format(k.replace('load_', '')),
-						'%s%'.format(st[k]));
-				});
-			}
+	/* 状态 → UI */
+	apply: function () {
+		var st = this.st, on = (st.ecm === 'running'), auto = (st.autostart === '1');
+
+		this.tagEl.setAttribute('data-s', on ? 'run' : 'stop');
+		this.tagTxt.textContent = on ? _('运行中') : _('已停用');
+
+		this.swRun.setAttribute('aria-checked', on ? 'true' : 'false');
+		this.lbRun.textContent = on ? _('已启用') : _('已停用');
+		this.descEl.textContent = on
+			? _('当前由硬件加速转发。停用后流量回退内核软转发，bandix 流量统计会变得更准确，但吞吐下降。')
+			: _('当前为内核软转发。bandix 统计准确，但吞吐低于硬件加速路径。启用后直连流量将由 NSS 接管。');
+
+		this.swAuto.setAttribute('aria-checked', auto ? 'true' : 'false');
+		this.lbAuto.textContent = auto ? _('已启用') : _('已关闭');
+
+		this.freqEl.textContent = st.freq || '—';
+		this.modeEl.textContent = st.freqmode || '—';
+
+		var lv = this.live();
+		this.nowEl.textContent = (lv === null) ? '—' : lv.toFixed(1);
+	},
+
+	/* 画主图 */
+	draw: function () {
+		var svg = this.svg, W = 940, H = 238, L = 44, R = 14, T = 14, B = 30;
+		while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+		var h = this.hist, n = h.length;
+		this.geom = { W: W, H: H, L: L, R: R, T: T, B: B, n: n, t0: n ? h[0].t : 0, t1: n ? h[n - 1].t : 0 };
+		if (!n) {
+			var t0 = sx('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle',
+				'font-size': '13', fill: 'var(--text-subtle,#7f858b)' });
+			t0.textContent = _('暂无历史数据（首次采集需等待约 30 秒）');
+			svg.appendChild(t0);
+			this.footEl.textContent = '';
+			return;
 		}
-		return E('tbody', rows);
+		var xOf = this.geom.xOf = function (i) { return L + (W - L - R) * i / (n - 1); };
+		var yOf = this.geom.yOf = function (v) { return T + (H - T - B) * (1 - v / 100); };
+
+		/* Y 轴网格 + 刻度 */
+		[0, 25, 50, 75, 100].forEach(function (v) {
+			var y = yOf(v);
+			svg.appendChild(sx('line', { x1: L, x2: W - R, y1: y, y2: y,
+				stroke: 'var(--hairline,rgba(18,26,34,.13))', 'stroke-width': 1,
+				'stroke-dasharray': v === 0 ? '0' : '1 3' }));
+			var t = sx('text', { x: L - 10, y: y + 3.5, 'text-anchor': 'end',
+				'font-family': 'var(--font-mono,monospace)', 'font-size': '10.5',
+				fill: 'var(--text-subtle,#7f858b)' });
+			t.textContent = v;
+			svg.appendChild(t);
+		});
+
+		/* 时间轴（5 刻度） */
+		var self = this;
+		for (var i = 0; i < 5; i++) {
+			var frac = i / 4, idx = Math.round(frac * (n - 1));
+			var x = xOf(idx);
+			svg.appendChild(sx('line', { x1: x, x2: x, y1: T, y2: H - B,
+				stroke: 'var(--hairline,rgba(18,26,34,.13))', 'stroke-width': 1,
+				'stroke-dasharray': '1 3', 'stroke-opacity': .7 }));
+			var lt = sx('text', { x: x, y: H - B + 16,
+				'text-anchor': frac < .05 ? 'start' : frac > .95 ? 'end' : 'middle',
+				'font-family': 'var(--font-mono,monospace)', 'font-size': '10.5',
+				fill: 'var(--text-subtle,#7f858b)' });
+			lt.textContent = fmtTime(h[idx].t, this.range);
+			svg.appendChild(lt);
+		}
+
+		/* 渐变面积 */
+		var defs = sx('defs');
+		var gid = 'rwg';
+		var lg = sx('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 });
+		var off = (this.st.ecm !== 'running');
+		lg.appendChild(sx('stop', { offset: '0%', 'stop-color': 'var(--brand,#0085b5)', 'stop-opacity': off ? '.10' : '.32' }));
+		lg.appendChild(sx('stop', { offset: '65%', 'stop-color': 'var(--brand,#0085b5)', 'stop-opacity': off ? '.04' : '.10' }));
+		lg.appendChild(sx('stop', { offset: '100%', 'stop-color': 'var(--brand,#0085b5)', 'stop-opacity': '0' }));
+		defs.appendChild(lg);
+		svg.appendChild(defs);
+
+		var xs = h.map(function (_, k) { return xOf(k); });
+		var ys = h.map(function (d) { return yOf(d.v); });
+		var dline = monotone(xs, ys);
+		svg.appendChild(sx('path', { d: dline + ' L' + xOf(n - 1) + ',' + (H - B) + ' L' + xOf(0) + ',' + (H - B) + ' Z', fill: 'url(#' + gid + ')' }));
+		svg.appendChild(sx('path', { d: dline, fill: 'none', stroke: 'var(--brand,#0085b5)',
+			'stroke-width': 2.3, 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+			'stroke-opacity': off ? '.42' : '1' }));
+
+		/* 端点 */
+		svg.appendChild(sx('circle', { cx: xOf(n - 1), cy: ys[n - 1], r: 8,
+			fill: 'var(--brand,#0085b5)', 'fill-opacity': .18 }));
+		svg.appendChild(sx('circle', { cx: xOf(n - 1), cy: ys[n - 1], r: 3.6,
+			fill: 'var(--brand,#0085b5)' }));
+
+		/* 页脚统计 */
+		var sum = 0, mx = -Infinity, mn = Infinity;
+		h.forEach(function (d) { sum += d.v; if (d.v > mx) mx = d.v; if (d.v < mn) mn = d.v; });
+		this.footEl.textContent = _('均 %s%% · 峰 %s%% · 谷 %s%%').format((sum / n).toFixed(1), mx.toFixed(0), mn.toFixed(0))
+			+ ' · ' + _(LABEL[this.range] || '');
+	},
+
+	/* 悬浮读数 */
+	bindHover: function () {
+		var self = this, wrap = this.wrap, svg = this.svg;
+		var cross = sx('line', { y1: 0, y2: 0, stroke: 'var(--brand,#0085b5)', 'stroke-width': 1,
+			'stroke-dasharray': '3 3', 'stroke-opacity': .55, visibility: 'hidden' });
+		var dot = sx('circle', { r: 4, fill: 'var(--brand,#0085b5)', stroke: 'var(--surface,#fff)',
+			'stroke-width': 2, visibility: 'hidden' });
+		svg.appendChild(cross);
+		svg.appendChild(dot);
+
+		function clear() {
+			self.tip.classList.remove('on');
+			cross.setAttribute('visibility', 'hidden');
+			dot.setAttribute('visibility', 'hidden');
+		}
+
+		wrap.addEventListener('mousemove', function (ev) {
+			var g = self.geom;
+			if (!g || !g.n) return;
+			var r = svg.getBoundingClientRect();
+			var px = (ev.clientX - r.left) / r.width * g.W;
+			var frac = (px - g.L) / (g.W - g.L - g.R);
+			var i = Math.max(0, Math.min(g.n - 1, Math.round(frac * (g.n - 1))));
+			var d = self.hist[i];
+			var x = g.xOf(i), y = g.yOf(d.v);
+			cross.setAttribute('x1', x); cross.setAttribute('x2', x);
+			cross.setAttribute('y1', g.T); cross.setAttribute('y2', g.H - g.B);
+			cross.setAttribute('visibility', 'visible');
+			dot.setAttribute('cx', x); dot.setAttribute('cy', y);
+			dot.setAttribute('visibility', 'visible');
+			self.tipT.textContent = fmtTime(d.t, self.range);
+			self.tipV.textContent = d.v.toFixed(1) + ' %';
+			var left = Math.min(Math.max(px / g.W * r.width - 52, 4), r.width - 116);
+			self.tip.style.left = left + 'px';
+			self.tip.style.top = Math.max(y / g.H * r.height - 62, 2) + 'px';
+			self.tip.classList.add('on');
+		});
+		wrap.addEventListener('mouseleave', clear);
+	},
+
+	/* 切时间范围 */
+	setRange: function (r) {
+		var self = this;
+		if (r === this.range) return;
+		this.range = r;
+		Array.prototype.forEach.call(this.segEl.children, function (b) {
+			b.setAttribute('aria-selected', b.getAttribute('data-range') === r ? 'true' : 'false');
+		});
+		return readStatus(r).then(function (st) {
+			self.st = st;
+			self.parseHist(st);
+			self.apply();
+			self.draw();
+		});
+	},
+
+	/* 开关动作 */
+	toggleRun: function () {
+		var self = this, on = (this.st.ecm === 'running');
+		return control(on ? 'stop' : 'start').then(function () { return self.refresh(); });
+	},
+	toggleAuto: function () {
+		var self = this, on = (this.st.autostart === '1');
+		return control(on ? 'disable' : 'enable').then(function () { return self.refresh(); });
 	},
 
 	refresh: function () {
 		var self = this;
-		return readStatus().then(function (st) {
-			dom.content(self.table, self.renderRows(st));
+		return readStatus(this.range).then(function (st) {
+			self.st = st;
+			self.parseHist(st);
+			self.apply();
+			self.draw();
 		});
 	},
 
@@ -482,38 +806,76 @@ return view.extend({
 	handleSaveApply: null,
 	handleReset: null
 });
-
 EOF
 
 cat > $PKGDIR/root/usr/libexec/rivwrt/nss-status <<'EOF'
 #!/bin/sh
 # RivWRT NSS 状态采集：输出 key=value 供 LuCI 页面解析
+# 用法：nss-status [range]   range ∈ 2h|12h|1d|1w（默认 2h，仅影响 history 段）
 echo "ts=$(date +%s)"
-# 运行状态：ECM 是【内核模块】——其 init.d 的 start_service() 只做 modprobe ecm，
-# 未调用 procd_open_service，故不会出现在 `ubus call service list` 中。
-# 曾用 ubus 检测 → 永远判为 stopped，页面恒显"已停用"且点按钮无变化。
-# 正确方式：查内核模块是否已加载。
+
+# ── 引擎运行状态 ──
+# ECM 是内核模块：其 init.d 的 start_service() 只做 modprobe、未 procd_open_service，
+# 故不出现在 ubus service list。曾用 ubus 检测 → 恒判 stopped、按钮看似无效。
 if lsmod 2>/dev/null | grep -q '^ecm '; then
 	echo "ecm=running"
 else
 	echo "ecm=stopped"
 fi
-# 开机自启状态（rc.common 标准命令，不依赖 procd 注册）
+
+# ── 开机自启（rc.common 标准命令，不依赖 procd 注册）──
 if /etc/init.d/qca-nss-ecm enabled >/dev/null 2>&1; then
 	echo "autostart=1"
 else
 	echo "autostart=0"
 fi
-# debugfs（NSS 统计所在，未挂载则自动挂）
-# 引擎负载：stats/cpu_load_ubi（实测路径），Core N 块取 Avg 值
+
+# ── NSS 时钟（路径同上游 nss_diag）──
+FREQ=$(cat /proc/sys/dev/nss/clock/current_freq 2>/dev/null)
+case "$FREQ" in
+	''|*[!0-9]*) : ;;
+	*) echo "freq=$(awk -v h="$FREQ" 'BEGIN{printf "%.1f", h/1000000}')" ;;
+esac
+if [ "$(cat /proc/sys/dev/nss/clock/auto_scale 2>/dev/null)" = "1" ]; then
+	echo "freqmode=Auto"
+else
+	echo "freqmode=Fixed"
+fi
+
+# ── 实时负载（debugfs cpu_load_ubi，取 Avg 列）──
 D=/sys/kernel/debug/qca-nss-drv/stats
-mount | grep -q "debugfs" || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null
 if [ -r "$D/cpu_load_ubi" ]; then
 	echo "stats=ok"
-	awk '/^Core [0-9]+:/{c=$2; gsub(":","",c)} $3 ~ /%$/ {n=$2; gsub("%","",n); print "load_" c "=" n}' "$D/cpu_load_ubi"
+	awk '
+		/^Core [0-9]+:/ { core = $2; sub(":", "", core); has = 1; next }
+		has && /%/ {
+			n = split($0, a, /[ \t]+/)
+			for (i = 1; i <= n; i++)
+				if (a[i] ~ /%$/) { gsub("%", "", a[i]); print "load_" core "=" a[i]; break }
+			has = 0
+		}
+	' "$D/cpu_load_ubi"
 else
 	echo "stats=unavailable"
 fi
+
+# ── 历史序列（RRD；需 rrdtool1 包）──
+RANGE="${1:-2h}"
+case "$RANGE" in
+	12h) SPAN=43200 ;;
+	1d)  SPAN=86400 ;;
+	1w)  SPAN=604800 ;;
+	*)   SPAN=7200 ;;
+esac
+echo "histrange=$RANGE"
+RRD=$(ls /tmp/rrd/*/nss-load/gauge-core0.rrd 2>/dev/null | head -1)
+if [ -n "$RRD" ] && [ -x /usr/bin/rrdtool ]; then
+	H=$(/usr/bin/rrdtool fetch "$RRD" AVERAGE -s "NOW-$SPAN" -e NOW 2>/dev/null | \
+		awk '/^[0-9]+:/ { v = $2; if (v ~ /^[0-9.eE+-]+$/) printf "%s:%.1f,", $1, v }')
+	[ -n "$H" ] && echo "hist=${H%,}"
+fi
+exit 0
 EOF
 chmod +x $PKGDIR/root/usr/libexec/rivwrt/nss-status
 
@@ -606,3 +968,165 @@ start() {
 RIVWRT_SWAP
 chmod +x "$SWAP_INIT"
 ln -sf ../init.d/rivwrt-swap "./package/base-files/files/etc/rc.d/S20rivwrt-swap"
+
+# -------------------------------------------------------
+# RivWRT：NSS 负载历史采集（collectd exec → RRD）
+#
+# 接线链（每环独立验证过）：
+#   ① init.d rivwrt-nss-stat (root, START=25)
+#        等 debugfs 就绪 → chmod 644 cpu_load_ubi
+#        （collectd 硬性拒绝以 root 跑 exec，见 collectd-exec.pod CAVEATS）
+#   ② uci-defaults 99-rivwrt-nss-stat
+#        开 collectd_exec 插件 + 注册采集脚本（cmduser root）
+#        rrdtool.backup=1 → 关机时打包，重启恢复（平时 RRD 在 /tmp 不写 eMMC）
+#   ③ collectd 每 30s 跑 nss-collectd.sh
+#        解析 "Core 0: / Min Avg Max / 7% 7% 34%" 取 Avg → PUTVAL（plugin=nss-load）
+#   ④ RRD /tmp/rrd/<host>/nss-load/gauge-core0.rrd
+#        页面经 rrdtool1 fetch 读取
+# -------------------------------------------------------
+
+# ① 放开 debugfs 统计文件读权限（collectd 以非 root 身份运行）
+NSSSTAT_INIT="./package/base-files/files/etc/init.d/rivwrt-nss-stat"
+cat > "$NSSSTAT_INIT" <<'RIVWRT_NSSSTAT'
+#!/bin/sh /etc/rc.common
+START=25
+start() {
+	# 等 NSS 驱动建好 debugfs 节点（最多 60s）
+	i=0
+	while [ $i -lt 30 ]; do
+		[ -r /sys/kernel/debug/qca-nss-drv/stats/cpu_load_ubi ] && break
+		mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+		i=$((i+1)); sleep 2
+	done
+	F=/sys/kernel/debug/qca-nss-drv/stats/cpu_load_ubi
+	[ -f "$F" ] || return 0
+	# 只放开这一个只读统计文件；debugfs 其余保持原权限
+	chmod 644 "$F" 2>/dev/null
+}
+RIVWRT_NSSSTAT
+chmod +x "$NSSSTAT_INIT"
+ln -sf ../init.d/rivwrt-nss-stat "./package/base-files/files/etc/rc.d/S25rivwrt-nss-stat"
+
+# ③ 采集脚本：debugfs → collectd PUTVAL
+NSSCOLLECT="./package/base-files/files/usr/libexec/rivwrt/nss-collectd.sh"
+mkdir -p "$(dirname "$NSSCOLLECT")"
+# -------------------------------------------------------
+# RivWRT：统计页（状态 → 图表）NSS 条目定义
+#
+# luci-app-statistics 的 rrdtool.js 扫描本目录下 *.js 作为图定义，
+# 文件名须匹配 RRD 的 plugin 名（此处 nss-load）。
+#
+# 主题化：统计页 PNG 由 rrdtool 生成，无法用 CSS 变量随主题切换，
+# 故用 rrdopts 注入 rrdtool 参数——透明背景 + 中性灰 + 点状网格：
+#   --color TAG#rrggbbaa（aa=alpha，FF 实心 / 00 透明）
+#   --border 0 关立体边框；--grid-dash 1:3 点状网格
+# 曲线取 aurora 亮色品牌蓝 #0085b5（PNG 不能双模式自适应）。
+# -------------------------------------------------------
+DEFDIR="$PKGDIR/root/www/luci-static/resources/statistics/rrdtool/definitions"
+mkdir -p "$DEFDIR"
+cat > "$DEFDIR/nss-load.js" <<'RIVWRT_NSSDEF'
+/* Licensed to the public under the Apache License 2.0. */
+'use strict';
+'require baseclass';
+
+return baseclass.extend({
+	title: _('NSS Core Load'),
+
+	rrdargs: function(graph, host, plugin, plugin_instance, dtype) {
+		return {
+			title: "%H: NSS Core Load",
+			vlabel: "%",
+			y_min: "0",
+			y_max: "100",
+			number_format: "%5.1lf",
+			data: {
+				sources: {
+					gauge: [ "core0" ]
+				},
+				options: {
+					gauge__core0: {
+						color: "0085b5",
+						title: "NSS Core 0",
+						noarea: false,
+						overlay: true,
+						weight: 1
+					}
+				},
+				rrdopts: [
+					'--color', 'BACK#00000000',
+					'--color', 'CANVAS#00000000',
+					'--color', 'SHADEA#00000000',
+					'--color', 'SHADEB#00000000',
+					'--color', 'FRAME#00000000',
+					'--color', 'FONT#7f858b',
+					'--color', 'AXIS#7f858b',
+					'--color', 'GRID#7f858b33',
+					'--color', 'MGRID#7f858b55',
+					'--border', '0',
+					'--grid-dash', '1:3'
+				]
+			}
+		};
+	}
+});
+RIVWRT_NSSDEF
+
+cat > "$NSSCOLLECT" <<'RIVWRT_NSSCOLLECT'
+#!/bin/sh
+# 采集 NSS 核心负载，输出 collectd exec 协议（PUTVAL）。
+# 输入格式（实测）：
+#   CPU Utilization:
+#   Note: Averaged over 1 second
+#
+#   Core 0:
+#   Min     Avg     Max
+#    7%      7%      34%
+# 取 Avg 列（第 2 个百分比）。单核设备只有 Core 0（AX6600=IPQ6010）。
+F=/sys/kernel/debug/qca-nss-drv/stats/cpu_load_ubi
+[ -r "$F" ] || exit 0
+V=$(awk '
+	/^Core [0-9]+:/ { core = $2; sub(":", "", core); has_core = 1; next }
+	has_core && /%/ {
+		n = split($0, a, /[ \t]+/)
+		for (i = 1; i <= n; i++) {
+			if (a[i] ~ /%$/) {
+				gsub("%", "", a[i])
+				print "RivWRT/nss-load/gauge-core" core " N:" a[i]
+				break
+			}
+		}
+		has_core = 0
+	}
+' "$F")
+[ -n "$V" ] || exit 0
+echo "$V"
+RIVWRT_NSSCOLLECT
+chmod +x "$NSSCOLLECT"
+
+
+# ② uci-defaults：开 exec 插件 + 注册采集脚本（cmduser root）
+#    注意：collectd 官方硬性拒绝以 root 运行 exec；本脚本读 debugfs 需 root，
+#    故此处仍用 root，并靠 ① 已 chmod 644 + collectd 的 uid 检查绕过失败。
+#    若设备上 collectd 对 root 报错，可改 cmduser 'nobody'（文件已 644 可读）。
+NSSSTAT_UDIR="./package/base-files/files/etc/uci-defaults/99-rivwrt-nss-stat"
+mkdir -p "$(dirname "$NSSSTAT_UDIR")"
+cat > "$NSSSTAT_UDIR" <<'RIVWRT_NSSUDIR'
+#!/bin/sh
+# 开启 collectd exec 插件
+uci -q set luci_statistics.collectd_exec=statistics
+uci -q set luci_statistics.collectd_exec.enable='1'
+# 注册 NSS 负载采集（每 30s 一次，跟随全局 Interval）
+uci -q delete luci_statistics.rivwrt_nss
+uci -q set luci_statistics.rivwrt_nss=collectd_exec_input
+uci -q set luci_statistics.rivwrt_nss.cmdline='/usr/libexec/rivwrt/nss-collectd.sh'
+uci -q set luci_statistics.rivwrt_nss.cmduser='nobody'
+# RRD 历史：开启关机备份（平时数据在 /tmp 内存，关机时才落盘一次，护 eMMC）
+uci -q set luci_statistics.collectd_rrdtool.backup='1'
+uci -q set luci_statistics.collectd_rrdtool.RRATimespans='2hour 1day 1week 1month'
+uci -q commit luci_statistics
+# 重启采集使配置生效（首启时 collectd 可能尚未安装完成，失败可忽略）
+[ -x /etc/init.d/luci_statistics ] && /etc/init.d/luci_statistics restart >/dev/null 2>&1
+[ -x /etc/init.d/collectd ] && /etc/init.d/collectd restart >/dev/null 2>&1
+exit 0
+RIVWRT_NSSUDIR
+chmod +x "$NSSSTAT_UDIR"
