@@ -318,6 +318,17 @@ jobs:
             echo "- Kernel: \`$WRT_KVER\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # 产物兜底留存：Release 创建可能因 GitHub API 故障失败（实测 500），
+      # 此时固件仍可从本 run 的 Artifacts 下载，不丢编译成果（1~2 小时）。
+      - name: Upload Firmware Artifacts
+        if: env.WRT_TEST != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{env.WRT_NAME}}-${{env.WRT_CONFIG}}-${{env.WRT_DATE}}
+          path: ./wrt/upload/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Release Firmware
         uses: softprops/action-gh-release@v2
         with:
