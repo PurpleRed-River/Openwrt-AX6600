@@ -1,3 +1,4 @@
+#!/bin/bash
 # =========================================================
 # RivWRT 构建期定制脚本
 # 由 WRT-CORE.yml 在 make defconfig 之前调用（cwd = wrt 源码树根）
@@ -12,7 +13,6 @@
 # 自建包清单与提取模式见本文件"组件注入"区块；
 # 配置增量见 Config/GENERAL_AX6600_RIVWRT.txt。
 # =========================================================
-#!/bin/bash
 
 # -------------------------------------------------------
 # 工具函数
@@ -116,14 +116,29 @@ BANNER="./package/base-files/files/etc/banner"
  ||   |.   ||    '|.|      ||| |||     ||   |.     ||    
 .||.  '|' .||.    '|        |   |     .||.  '|'   .||.    
 
+           " Flow downstream, not upstream. "
+
  =======================================================
    RivWRT - based on ones20250/Openwrt-AX6600
-   " Flow downstream, not upstream. "
    aurora / athena-led / bandix-plus / daede / nss
-   ImmortalWrt %D %V, %C
+   RivWRT %V, %C
  =======================================================
 RIVWRT_BANNER
 
+# -------------------------------------------------------
+# RivWRT：openwrt_release 品牌硬钉（不依赖 kconfig 的 VERSION_DIST）
+# CONFIG_VERSION_DIST 的 prompt 挂在 "if DEVEL" 下，defconfig 可能丢弃
+# 用户值回落 default "ImmortalWRT"（实测 6dfacd3 固件未生效）。
+# 故直接改 base-files 的 openwrt_release 模板：DISTRIB_ID/DESCRIPTION
+# 硬编码 RivWRT，%V/%C 仍由构建系统展开（版本号/revision 照常显示）。
+# 该模板会被 VERSION_SED 处理，属官方机制内的注入点，升级安全。
+# -------------------------------------------------------
+RELEASE_FILE="./package/base-files/files/etc/openwrt_release"
+if [ -f "$RELEASE_FILE" ]; then
+	sed -i "s/^DISTRIB_ID=.*/DISTRIB_ID='RivWRT'/" "$RELEASE_FILE"
+	sed -i "s/^DISTRIB_DESCRIPTION=.*/DISTRIB_DESCRIPTION='RivWRT %V %C'/" "$RELEASE_FILE"
+	echo "RivWRT: openwrt_release branded (DISTRIB_ID/DESCRIPTION)"
+fi
 # -------------------------------------------------------
 # RivWRT：内核分区尺寸适配（A 槽 12MiB 内核）
 # -------------------------------------------------------
