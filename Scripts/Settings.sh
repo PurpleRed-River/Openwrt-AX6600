@@ -199,7 +199,16 @@ fi
 IMG_MK="./target/linux/qualcommax/image/ipq60xx.mk"
 if [ -f "$IMG_MK" ]; then
 	sed -i "/Device\/jdcloud_re-cs-02/,/TARGET_DEVICES += jdcloud_re-cs-02/ s/KERNEL_SIZE := 6144k/KERNEL_SIZE := 12288k/" "$IMG_MK"
-	echo "RivWRT: KERNEL_SIZE -> 12288k (A槽 12MiB 内核分区)"
+	# 断言"最终状态"而非"sed 命中"：若上游某天自己改成 12288k，这里同样通过。
+	# 反过来，上游若调整了设备段结构导致 sed 落空，则立即失败 —— 否则会编出
+	# 一个按 6MiB 分区布局的固件，刷进去与设备的 12MiB 内核分区不匹配。
+	if awk '/Device\/jdcloud_re-cs-02/,/TARGET_DEVICES \+= jdcloud_re-cs-02/' "$IMG_MK" \
+		| grep -q 'KERNEL_SIZE := 12288k'; then
+		echo "RivWRT: KERNEL_SIZE -> 12288k (A槽 12MiB 内核分区)"
+	else
+		echo "RivWRT: ERROR - KERNEL_SIZE patch missed in $IMG_MK (设备段结构变了？)" >&2
+		exit 1
+	fi
 fi
 
 # -------------------------------------------------------
@@ -231,6 +240,18 @@ sed -i \
 	-e "/&dp5 {/,/};/ s/label = \"wan\"/label = \"lan1\"/" \
 	"$DTS_FILE"
 
+# 断言最终 label（不看 sed 是否命中）：三个端口节点各自改对才算过。
+# 这个改动若静默失效，编出来的固件网口角色会错位 —— 用户按 README 接线会接错口。
+dts_label() {
+	awk "/^&$1 \{/,/^};/" "$DTS_FILE" | sed -n 's/.*label = "\([^"]*\)".*/\1/p' | head -1
+}
+if [ "$(dts_label dp1)" = "wan1" ] && [ "$(dts_label dp2)" = "wan2" ] && [ "$(dts_label dp5)" = "lan1" ]; then
+	echo "RivWRT: DTS port labels -> dp1=wan1 dp2=wan2 dp5=lan1"
+else
+	echo "RivWRT: ERROR - DTS label patch missed (dp1=$(dts_label dp1) dp2=$(dts_label dp2) dp5=$(dts_label dp5)，期望 wan1/wan2/lan1)" >&2
+	exit 1
+fi
+
 # --- 同步默认网络配置（02_network）---
 # 上游对本设备写死 LAN = "lan1 lan2 lan3 lan4"、WAN = "wan"。改名后该列表里的
 # lan2 已不存在、wan 也不存在，会向 br-lan 塞入无效成员、并让 WAN 指向不存在的设备。
@@ -244,6 +265,17 @@ sed -i \
 #   proto 暂用 none：接线后在「网络 → 接口」里按实际线路选 DHCP/PPPoE。
 NW_BD="./target/linux/qualcommax/ipq60xx/base-files/etc/board.d/02_network"
 sed -i 's|ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 lan4" "wan"|ucidef_set_interfaces_lan_wan "lan1 lan3 lan4" "wan1"\n\t\tucidef_set_interface "wan2" device "wan2" protocol "none"|' "$NW_BD"
+
+# 断言最终状态：LAN 列表已剔除 lan2、上行名为 wan1、且 wan2 已单独声明。
+# 静默失效的后果：默认 network 配置里 br-lan 挂着不存在的 lan2、WAN 指向不存在的
+# wan1 —— 首次刷机后直接没网，且现象会被误判为"驱动问题"。
+if grep -q 'ucidef_set_interfaces_lan_wan "lan1 lan3 lan4" "wan1"' "$NW_BD" && \
+   grep -q 'ucidef_set_interface "wan2" device "wan2"' "$NW_BD"; then
+	echo "RivWRT: 02_network -> lan(1,3,4) + wan1 + wan2"
+else
+	echo "RivWRT: ERROR - 02_network patch missed in $NW_BD（设备分支结构变了？）" >&2
+	exit 1
+fi
 
 # --- 防火墙 zone 纳入两条上行 ---
 # zone 的【名字】保持 wan 不动：firewall.config 里有 11 处 option src/dest 'wan'

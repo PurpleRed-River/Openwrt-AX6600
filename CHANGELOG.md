@@ -180,6 +180,49 @@
 
 ---
 
+## 2026-09-14 · 源码基座切换到 PurpleRed-River/immortalwrt
+
+编译拉取的源码仓库由 `ones20250/immortalwrt_ipq` 换成 `PurpleRed-River/immortalwrt`
+（同为 `main` 分支）。**源码内容零差异** —— 三方 HEAD 是同一个 commit：
+
+```
+ones20250/immortalwrt_ipq      90448eeb2b8f5d172caedfe6d96ab3bacb058c09
+PurpleRed-River/immortalwrt    90448eeb2b8f5d172caedfe6d96ab3bacb058c09
+VIKINGYFY/immortalwrt          90448eeb2b8f5d172caedfe6d96ab3bacb058c09
+```
+
+三者是 `immortalwrt/immortalwrt → VIKINGYFY/immortalwrt → {ones20250, PurpleRed-River}`
+的关系，且最近提交的作者全是 VIKING / VIKINGYFY / Tianling Shen —— ones20250 没有
+自己的提交，是 VIKINGYFY 的精确同步。逐文件比对 15 个关键路径（设备 DTS、02_network、
+ipq60xx.mk、NSS 驱动与 patch、regdb 功率/DFS patch、nss_freq/nss_diag、firewall.config、
+kernel-version.mk、feeds.conf.default 等）**全部 md5 相同**。
+
+- 改动点：`QCA-ALL.yml`（matrix SOURCE）· `WRT-TEST.yml`（下拉选项与默认值）
+  · `WRT-PKG-TEST.yml`（克隆地址）
+- 文案改为引用 `$WRT_SOURCE` 变量（`WRT_PROFILE_DESC` 与 Release 说明），
+  以后再换源不必改这些文字
+- 顺带修正 Release 说明一处措辞错误：`设备型号` 原先填的是源码仓库名，
+  现改为 `jdcloud_re-cs-02（京东云雅典娜 AX6600）`，源码仓库另列为 `源码基座`
+
+### 换源暴露的风险 → 补齐断言
+
+换源使"sed 目标漂移 → 静默失效"成为现实风险，故给 `Settings.sh` 里三处
+原本无校验的 sed 补上断言（另有防火墙那条本就有）：
+
+| 目标 | 静默失效的后果 |
+|---|---|
+| `ipq60xx.mk` 的 `KERNEL_SIZE` | 编出按 6MiB 分区布局的固件，与设备 12MiB 内核分区不匹配 |
+| DTS 三处端口 label | 网口角色错位，用户按 README 接线会接错口 |
+| `02_network` 设备分支 | 首次刷机默认配置里 br-lan 挂不存在的 lan2、WAN 指向不存在的 wan1 → 直接没网 |
+| `firewall.config` 的 wan zone | 两条上行都进不了 wan zone（无 NAT、入站策略失效）|
+
+断言判的是**最终状态**而非"sed 是否命中" —— 上游若某天自己改成目标值，同样通过。
+
+验证（注入漂移，用临时副本，未提交）：四个场景全部被正确拦截，退出码 1，
+错误信息指出具体文件与期望值；正常场景退出码 0。
+
+---
+
 ## 上游历史（fork 自 ones20250/Openwrt-AX6600）
 
 上游按 PURE（纯净）/ PLUS（预装 OpenClash、PassWall2、Docker 等）双版本发布，机制详见上游仓库。

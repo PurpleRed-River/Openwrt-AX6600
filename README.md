@@ -4,7 +4,7 @@
 
 **AX6600 雅典娜 · 个人定制固件**
 
-*基于 [ones20250/Openwrt-AX6600](https://github.com/ones20250/Openwrt-AX6600) 纯净基座*
+*编译机制基于 [ones20250/Openwrt-AX6600](https://github.com/ones20250/Openwrt-AX6600) · 源码基座 [PurpleRed-River/immortalwrt](https://github.com/PurpleRed-River/immortalwrt)*
 
 `IPQ6010` `12M+2G` `1G RAM` `128G eMMC` `NSS 加速` `dae eBPF` `kernel 6.18`
 
@@ -141,9 +141,16 @@ sh  Scripts/rivwrt-netfix-test.sh # 网口：br-lan 成员、旧接口名迁移
 
 | Workflow | 用途 |
 |---|---|
-| `QCA-ALL` | 正式编译（源码：ones20250/immortalwrt_ipq main） |
+| `QCA-ALL` | 正式编译（源码：PurpleRed-River/immortalwrt main） |
 | `WRT-TEST` | 仅生成 `.config`（几分钟，验证配置） |
 | `WRT-PKG-TEST` | 单包链编译验证（快速定位组件问题） |
+
+> **源码基座说明**：`PurpleRed-River/immortalwrt` 是 [VIKINGYFY/immortalwrt](https://github.com/VIKINGYFY/immortalwrt)
+> 的 fork（VIKINGYFY 又是 [immortalwrt/immortalwrt](https://github.com/immortalwrt/immortalwrt) 的 fork），
+> 提供 qualcommax/ipq60xx 高通平台支持与无线 regdb 调整（删 CN/US 的 DFS、提功率）。
+> 换源时确认三者中任意一个的 HEAD 即可 —— 本固件依赖的树内内容（设备 DTS、NSS 驱动、
+> regdb patch、`nss_freq`/`nss_diag`）都在这条 fork 链上，且 `Settings.sh` 的每处 sed
+> 目标都有对应断言，若不匹配会直接报错而非静默失效。
 
 - 固件命名：`RivWRT-时间-ipq60xx-jdcloud_re-cs-02-squashfs-factory/sysupgrade.bin`
 - 适配分区：**12MiB 内核 + 2GiB rootfs**（chenxin527 GPT，A 槽）

@@ -13,11 +13,11 @@ on:
         options:
           - IPQ60XX-WIFI-YES
       SOURCE:
-        default: 'ones20250/immortalwrt_ipq'
+        default: 'PurpleRed-River/immortalwrt'
         required: true
         type: choice
         options:
-          - ones20250/immortalwrt_ipq
+          - PurpleRed-River/immortalwrt
           - immortalwrt/immortalwrt
           - LiBwrt/openwrt-6.x
           - qosmio/openwrt-ipq

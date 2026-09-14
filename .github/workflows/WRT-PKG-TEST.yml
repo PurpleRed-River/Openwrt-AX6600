@@ -40,7 +40,7 @@ jobs:
 
       - name: Clone Code
         run: |
-          git clone --depth=1 --single-branch --branch main https://github.com/ones20250/immortalwrt_ipq.git ./wrt/
+          git clone --depth=1 --single-branch --branch main https://github.com/PurpleRed-River/immortalwrt.git ./wrt/
           cd ./wrt/
           # 移除国内镜像源（runner 直连官方源更快更稳）
           PROJECT_MIRRORS_FILE="./scripts/projectsmirrors.json"
