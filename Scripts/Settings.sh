@@ -399,6 +399,33 @@ UDIR="./package/base-files/files/etc/uci-defaults"
 mkdir -p "$UDIR"
 
 # -------------------------------------------------------
+# RivWRT：修正第三方 LuCI 包的 luci.mk 引用路径
+#
+# 第三方 LuCI 包的 Makefile 常用 `include ../../luci.mk` —— 这是给
+# feeds/luci/applications/<pkg>/ 那种层级写的相对路径。本固件按惯例把这类包
+# 克隆到 package/ 下，../../luci.mk 会解析成 wrt/luci.mk（不存在）→ 构建失败。
+# （本仓库其它第三方 LuCI 包如 aurora 用的是 $(TOPDIR)/feeds/luci/luci.mk 绝对路径，
+#   所以没踩过；dl12345/luci-app-mwan3 用的是相对路径。）
+#
+# 这里统一扫描修正，而非只针对某个包 —— 将来加新包也不会再踩。
+# 模式不锚定行首尾，容错缩进/多空格等写法差异。
+LUCIMK_FIXED=""
+for mk in $(grep -rl '\.\./\.\./luci\.mk' ./package/*/Makefile 2>/dev/null); do
+	sed -i 's|\.\./\.\./luci\.mk|$(TOPDIR)/feeds/luci/luci.mk|g' "$mk"
+	LUCIMK_FIXED="$LUCIMK_FIXED $(basename "$(dirname "$mk")")"
+done
+if [ -n "$LUCIMK_FIXED" ]; then
+	echo "RivWRT: luci.mk path fixed for:$LUCIMK_FIXED"
+fi
+# 断言：package/ 下不应再有指向 ../../luci.mk 的引用。
+# 漏改会导致该包构建直接失败（wrt/luci.mk 不存在），故此处显式拦下而不是留给 CI。
+if grep -rq '\.\./\.\./luci\.mk' ./package/*/Makefile 2>/dev/null; then
+	echo "RivWRT: ERROR - 仍有包以相对路径引用 luci.mk（会构建失败）:" >&2
+	grep -rl '\.\./\.\./luci\.mk' ./package/*/Makefile 2>/dev/null | sed 's/^/  /' >&2
+	exit 1
+fi
+
+# -------------------------------------------------------
 # uci-defaults：FullCone NAT（IPv4）
 # -------------------------------------------------------
 

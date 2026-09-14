@@ -221,6 +221,29 @@ kernel-version.mk、feeds.conf.default 等）**全部 md5 相同**。
 验证（注入漂移，用临时副本，未提交）：四个场景全部被正确拦截，退出码 1，
 错误信息指出具体文件与期望值；正常场景退出码 0。
 
+### 修复编译阻塞：第三方 LuCI 包的 luci.mk 路径
+
+推送前核查发现 `dl12345/luci-app-mwan3` 的 Makefile 用 `include ../../luci.mk`
+—— 这是给 `feeds/luci/applications/<pkg>/` 层级写的相对路径。本固件把这类包克隆到
+`package/`，`../../luci.mk` 会解析成 `wrt/luci.mk`（不存在）→ **构建直接失败**。
+（仓库其它第三方 LuCI 包如 aurora 用的是 `$(TOPDIR)/feeds/luci/luci.mk` 绝对路径，
+所以此前没踩过。）
+
+`Settings.sh` 增加统一的扫描修正：找出 `package/*/Makefile` 里任何含
+`../../luci.mk` 的引用改成绝对路径，模式不锚定行首尾（容错缩进/多空格），
+修正后断言"不应再有残留"。做成通用而非只针对 mwan3 —— 将来加新包不会再踩。
+
+验证三种场景：正常相对路径（修正）· 带缩进变体（仍能修正）· 已是绝对路径
+（不动、不报错）。
+
+### 修正 README 的菜单路径
+
+原来写的「网络 → 多WAN管理器」不准确。读 `menu.d` 后改正：mwan3 有**两个入口**，
+`admin/network/mwan3/*`（配置：接口/成员/策略/规则/IP 集）与
+`admin/status/mwan3/*`（查看：概览/状态/路由/诊断/排障）；中文标题是
+**「MultiWAN 管理器」**（zh_Hans 翻译）。另补上按运营商分流（`ipset` + `loadfile`）
+的说明与"更新后须 restart 而非 reload"的提醒。
+
 ---
 
 ## 上游历史（fork 自 ones20250/Openwrt-AX6600）

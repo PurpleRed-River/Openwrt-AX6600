@@ -164,7 +164,12 @@ sh  Scripts/rivwrt-netfix-test.sh # 网口：br-lan 成员、旧接口名迁移
 <details>
 <summary><b>多 WAN（双宽带负载均衡 / 故障切换）</b></summary>
 
-固件已装 **mwan3 3.6.12**（nftables 版）+ 其 LuCI 界面，页面在 **网络 → 多WAN管理器**。
+固件已装 **mwan3 3.6.12**（nftables 版）+ 其 LuCI 界面。界面有**两个入口**：
+
+| 菜单位置 | 用途 |
+|---|---|
+| **网络 → MultiWAN 管理器** | 配置：接口 / 成员 / 策略 / 规则 / IP 集 |
+| **状态 → MultiWAN 管理器** | 查看：概览 / 状态 / 路由 / 诊断 / 排障 |
 
 **接线**：第一条线接丝印 **LAN1**（`wan1`），第二条接丝印 **LAN2**（`wan2`）。
 
@@ -172,10 +177,11 @@ sh  Scripts/rivwrt-netfix-test.sh # 网口：br-lan 成员、旧接口名迁移
 
 1. **网络 → 接口**：分别把 `wan1` / `wan2` 的协议按实际线路设为 `DHCP` 或 `PPPoE`
    （PPPoE 需填账号密码）。出厂默认两条都是 `none`。
-2. **网络 → 多WAN管理器**：
-   - 确认 `wan1`、`wan2` 两个接口都启用（`wan2` 默认未启用，接线后打开）
-   - 启用 `default_rule_v4` 规则（或新建一条），策略选 `balanced`
-3. 保存应用后，mwan3 才开始在两条线上分流。
+2. **网络 → MultiWAN 管理器 → 接口**：确认 `wan1`、`wan2` 都启用
+   （`wan2` 默认未启用，接线后打开）。
+3. **网络 → MultiWAN 管理器 → 规则**：启用 `default_rule_v4`（或新建一条），
+   策略选 `balanced`。
+4. 保存应用后，mwan3 才开始在两条线上分流。
 
 **预置的策略**（在 mwan3 配置里已生成，直接用）：
 
@@ -184,6 +190,14 @@ sh  Scripts/rivwrt-netfix-test.sh # 网口：br-lan 成员、旧接口名迁移
 | `balanced` | 两条等权分流（weight 1:1）。想按带宽比分配就改 member 的 weight，如 1000M+500M → 2:1 |
 | `wan1_only` | 全部走第一条 |
 | `wan2_only` | 全部走第二条 |
+
+**按运营商分流**：mwan3 的规则支持 `ipset` 选项，可把「目的 IP 属于某运营商」
+的流量固定走对应线路。做法是先用 `config ipset` 声明一个集合（`loadfile` 指向
+纯文本 CIDR 列表），再在规则里引用它 —— 规则**按配置文件顺序 first-match**，
+所以运营商规则必须排在默认规则之前。IP 段数据可用社区整理的
+[ispip.clang.cn](https://ispip.clang.cn)（按运营商分文件，v4/v6 分开）。
+> 更新集合后必须 `restart` 而非 `reload`：mwan3 渲染集合时只 `add element`
+> 不做 flush，仅 reload 会让已删除的旧网段永久残留。
 
 **线路健康探测**：`track_ip` 已改为国内可达的 `223.5.5.5 / 119.29.29.29 / 180.76.76.76`
 （上游默认是 1.0.0.1、208.67.x.x 等，国内探测容易误判成"线路故障"而错误切走流量）。
