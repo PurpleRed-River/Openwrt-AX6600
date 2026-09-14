@@ -1023,34 +1023,66 @@ mkdir -p "./package/base-files/files/etc/init.d" "./package/base-files/files/etc
 WIFI_INIT="./package/base-files/files/etc/init.d/rivwrt-wifi"
 cat > "$WIFI_INIT" <<'RIVWRT_WIFI'
 #!/bin/sh /etc/rc.common
-# RivWRT 无线兜底：逐项比对，仅在【与预期不符】时才修正并 reload。
+# RivWRT 无线兜底：参数比对 + 失效 radio 的【串行】重启 + 兜底重启一次
 #
+# ── 参数比对 ──
 # 编译期已在 mac80211.uc 注入 ssid/channel/htmode/country/txpower/encryption，
-# 故全新刷机（sysupgrade -n）时本脚本比对后无改动、不触发 wifi reload。
-# 价值在于【保留旧配置升级】的场景：旧固件可能残留 SSID=OWRT、加密 psk2、
+# 全新刷机（sysupgrade -n）时比对后无改动、不触发任何重启。
+# 价值在【保留旧配置升级】：旧固件可能残留 SSID=OWRT、加密 psk2、
 # 或非法 htmode（曾误写 HT160 —— 不在合法枚举内，致 5G radio 起不来）。
 #
 # ★ 刻意不设置 country：ath11k 对运行时国家码热切换脆弱，实测触发
 #   cfg80211 WARNING (net/wireless/reg.c:4035 reg_get_max_bandwidth)
-#   与 ath11k_pci: failed to perform regd update : -22，radio 直接起不来。
+#   与 ath11k_pci: failed to perform regd update : -22。
+#
+# ── 失效 radio 的串行重启 ──
+# 实测现象：全新刷机后 2.4G 正常、两个 5G 起不来；重启一次即恢复。
+# 根因：ath11k 的 phy 级 regd 更新走 workqueue，且【三个 radio 并发启动】时
+# 相互竞争，部分 phy 更新失败（日志实证 hostapd: Frequency 5180/5745 is not
+# allowed —— 即该 phy 的 regd 未生效、落到最严格域），对应 radio 起不来。
+#
+# ★ 关键：不可用 `wifi reload` 去"重试"—— 读 /sbin/wifi 源码可知
+#   wifi_reload() 忽略设备参数，执行的是 `ubus call network reload`（全量），
+#   会把三个 radio 一起重启，再次制造三路并发竞争（反而加剧问题）。
+#   必须用 `ubus call network.wireless {down,up} {"device":"radioN"}` 逐个来。
 START=99
 MARKER=/etc/.rivwrt-wifi-named
+REBOOT_GUARD=/etc/.rivwrt-wifi-rebooted
+
+# 逐 radio 的 upsert（不触发 netifd 全量 reload）
+rw_updown() {
+	ubus call network.wireless "$1" "{\"device\":\"$2\"}" >/dev/null 2>&1
+}
+
+# 列出参与 AP 的 radio（跳过 disabled）
+list_radios() {
+	for r in $(uci -q show wireless | sed -n 's/^wireless\.\(radio[0-9]*\)=wifi-device$/\1/p'); do
+		[ "$(uci -q get wireless.$r.disabled)" = "1" ] || echo "$r"
+	done
+}
+
 start() {
 	[ -f "$MARKER" ] && return 0
 
-	# 等 /etc/config/wireless 生成：该文件由 netifd 首次启动时写入，过早执行
-	# 会读不到任何 radio（曾因此空转且误落 marker，导致永久不再重试）。
+	# 等配置就绪（/etc/config/wireless 由 netifd 首启生成）
 	i=0
 	while [ $i -lt 90 ]; do
 		[ -n "$(uci -q get wireless.radio0.band)" ] && break
 		[ $i -eq 20 ] && wifi config >/dev/null 2>&1
 		i=$((i+1)); sleep 2
 	done
-	# 配置未就绪 → 不落 marker，下次启动重试
 	[ -n "$(uci -q get wireless.radio0.band)" ] || return 1
 
+	# 等 ubus 无线服务可查询
+	i=0
+	while [ $i -lt 30 ]; do
+		ubus call network.wireless status >/dev/null 2>&1 && break
+		i=$((i+1)); sleep 2
+	done
+
+	# ── 参数比对（仅不符才改）──
 	CHANGED=0
-	for RADIO in $(uci -q show wireless | sed -n 's/^wireless\.\(radio[0-9]*\)=wifi-device$/\1/p'); do
+	for RADIO in $(list_radios); do
 		BAND=$(uci -q get wireless.$RADIO.band)
 		IFACE=$(uci -q show wireless | sed -n "s/^wireless\.\([a-z_0-9]*\)\.device=$RADIO$/\1/p" | head -1)
 		[ -n "$IFACE" ] || continue
@@ -1083,44 +1115,49 @@ start() {
 			uci -q delete wireless.$IFACE.key 2>/dev/null
 			CHANGED=1; }
 	done
+	[ "$CHANGED" = "1" ] && uci commit wireless
 
-	# 先应用改动
-	if [ "$CHANGED" = "1" ]; then
-		uci commit wireless
-		wifi reload >/dev/null 2>&1
-	fi
-
-	# ★ 起齐才算成功：实测「手动在界面反复禁用/启用几次后 5G 才起来」，
-	#   属启动时序竞争，根因在 mac80211.sh：
-	#       iw reg set "$country"; sleep 1
-	#   只等 1 秒，而 ath11k 的 regd 更新是异步 workqueue。三个 radio 并发
-	#   启动时都会调 iw reg set（读到的全局 reg 尚未生效），并发 regd 更新
-	#   竞争，部分 phy 失败（实测 dmesg: ath11k_pci 0000:01:00.0:
-	#   failed to perform regd update : -22），对应 radio 起不来。
-	#   此时再 reload 一次即可：全局 reg 已是目标值，mac80211.sh 会跳过
-	#   iw reg set，不再竞争 —— 这正是手动重试有效的原理。
-	WANT_AP=3
-	MAX_RELOAD=3
-	# 只匹配带引号的真实 SSID：iwinfo 对未启用的接口输出 "ESSID: unknown"，
-	# 用 'ESSID:' 会把它算作已启动（假阳性），导致误判"起齐了"。
-	count_ap() { iwinfo 2>/dev/null | grep -c 'ESSID: "'; }
-
-	r=0
-	while [ "$r" -lt "$MAX_RELOAD" ] && [ "$(count_ap)" -lt "$WANT_AP" ]; do
-		r=$((r+1))
-		wifi reload >/dev/null 2>&1
-		# 本轮最多等 20s 让其生效
-		i=0
-		while [ $i -lt 10 ] && [ "$(count_ap)" -lt "$WANT_AP" ]; do
-			i=$((i+1)); sleep 2
-		done
+	# ── 找出未起来的 radio ──
+	NEED=""
+	for RADIO in $(list_radios); do
+		wifi isup "$RADIO" || NEED="$NEED $RADIO"
 	done
 
-	# 仅在三个 AP 全部起来后落 marker；否则下次启动重试（最多等 60s）
-	if [ "$(count_ap)" -ge "$WANT_AP" ]; then
+	# ── 串行重启（一次一个），避免并发 regd 更新竞争 ──
+	if [ -n "$NEED" ]; then
+		logger -t rivwrt-wifi "以下 radio 未就绪，开始串行重启:$NEED"
+		for RADIO in $NEED; do
+			rw_updown down "$RADIO"
+			sleep 3
+			rw_updown up "$RADIO"
+			i=0
+			while [ $i -lt 10 ]; do
+				wifi isup "$RADIO" && break
+				i=$((i+1)); sleep 2
+			done
+		done
+	fi
+
+	# ── 复核：全好则落标记；仍有失败则兜底重启一次 ──
+	STILL=""
+	for RADIO in $(list_radios); do
+		wifi isup "$RADIO" || STILL="$STILL $RADIO"
+	done
+
+	if [ -z "$STILL" ]; then
+		rm -f "$REBOOT_GUARD"
 		touch "$MARKER"
 	else
-		logger -t rivwrt-wifi "仅 $(count_ap)/$WANT_AP 个 AP 起来（已重试 $r 次），未落 marker，下次启动重试"
+		if [ ! -f "$REBOOT_GUARD" ]; then
+			# 兜底：实测重启一次即可恢复。guard 文件防止无限重启循环。
+			touch "$REBOOT_GUARD"
+			logger -t rivwrt-wifi "串行重启后仍未就绪:$STILL，按兜底策略重启一次"
+			sleep 5
+			sync
+			reboot
+		else
+			logger -t rivwrt-wifi "仍未就绪:$STILL（兜底重启已用过，不再重启以免循环）"
+		fi
 	fi
 }
 RIVWRT_WIFI
