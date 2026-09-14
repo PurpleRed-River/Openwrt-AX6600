@@ -347,7 +347,11 @@ LUCI_TITLE:=RivWRT NSS acceleration toggle and live status
 # rrdtool1 提供 /usr/bin/rrdtool —— nss-status 用它读 RRD 历史。
 # 此前仅靠 luci-app-statistics 间接带入（它依赖 +rrdtool1），属隐式依赖；
 # 若该 app 被移除，历史图会静默失效。此处显式声明 +collectd-mod-exec
-# （采集 NSS 负载所需）。
+# （采集 NSS 负载所需；stat-genconfig 据此生成 Exec 行）。
+# 注：开关走的 ubus rc 对象由 rpcd 主程序 rc.c 无条件注册
+#     （main.c: rpc_rc_api_init），随 +luci-base → +rpcd 带入，
+#     不需要 rpcd-mod-rpcsys —— 后者只提供 system 对象
+#     （sysupgrade/password/reboot/factory）。
 LUCI_DEPENDS:=+luci-base +rrdtool1 +collectd-mod-exec
 LUCI_PKGARCH:=all
 
@@ -971,19 +975,17 @@ fi
 # 上游把档位存在 UCI nss_freq.settings.level，由 /etc/init.d/nss_freq 开机应用。
 echo "freqlevel=$(uci -q get nss_freq.settings.level || echo mid)"
 
-# ── 实时负载（debugfs cpu_load_ubi，取 Avg 列）──
+# ── 实时负载（debugfs cpu_load_ubi）──
+# 按 "Core N:" 定位，在紧随的百分比行取 $2 = Avg 列
+# （非行内首个百分比那列 = Min；也不像上游 sbin/cpuusage 那样
+#   硬编码 "NR==6"，避免行数变化时取空）。
 D=/sys/kernel/debug/qca-nss-drv/stats
 mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null
 if [ -r "$D/cpu_load_ubi" ]; then
 	echo "stats=ok"
 	awk '
 		/^Core [0-9]+:/ { core = $2; sub(":", "", core); has = 1; next }
-		has && /%/ {
-			n = split($0, a, /[ \t]+/)
-			for (i = 1; i <= n; i++)
-				if (a[i] ~ /%$/) { gsub("%", "", a[i]); print "load_" core "=" a[i]; break }
-			has = 0
-		}
+		has && /%/ { gsub("%", "", $2); print "load_" core "=" $2; has = 0 }
 	' "$D/cpu_load_ubi"
 else
 	echo "stats=unavailable"
@@ -1247,8 +1249,12 @@ cat > "$NSSCOLLECT" <<'RIVWRT_NSSCOLLECT'
 #   Note: Averaged over 1 second
 #   Core 0:
 #   Min     Avg     Max
-#    7%      7%      34%
-# 取 avg 列（第 2 个百分比）。单核设备仅有 Core 0（AX6600=IPQ6010）。
+#    2%      7%      34%
+# 取 Avg 列（= 行的第 2 个字段）。两个刻意的选择：
+#   ① 取 $2 而非行内首个百分比 —— 首个是 Min（瞬时最低），Avg 才代表负载；
+#   ② 按 "Core N:" 定位而非上游 sbin/cpuusage 的 "NR==6" 硬编码行号 ——
+#      行数一变（如多核、表头增减）硬编码即取空。
+# 单核设备仅有 Core 0（AX6600=IPQ6010）。
 F=/sys/kernel/debug/qca-nss-drv/stats/cpu_load_ubi
 INTERVAL="${COLLECTD_INTERVAL:-30}"
 case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=30 ;; esac
@@ -1257,17 +1263,7 @@ while :; do
 	if [ -r "$F" ]; then
 		awk '
 			/^Core [0-9]+:/ { core = $2; sub(":", "", core); has_core = 1; next }
-			has_core && /%/ {
-				n = split($0, a, /[ \t]+/)
-				for (i = 1; i <= n; i++) {
-					if (a[i] ~ /%$/) {
-						gsub("%", "", a[i])
-						print "RivWRT/nss-load/gauge-core" core " N:" a[i]
-						break
-					}
-				}
-				has_core = 0
-			}
+			has_core && /%/ { gsub("%", "", $2); print "RivWRT/nss-load/gauge-core" core " N:" $2; has_core = 0 }
 		' "$F"
 	fi
 	sleep "$INTERVAL"
