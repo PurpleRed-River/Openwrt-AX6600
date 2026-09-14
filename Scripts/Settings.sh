@@ -463,8 +463,29 @@ function sx(tag, attrs) {
 	return e;
 }
 
+/* 采集状态。只在【翻转】时提示一次 —— 本函数由页面每 5 秒轮询一次，
+   每次都弹通知会刷爆界面。 */
+var lastOk = null;
 function readStatus(range) {
+	function failed(why) {
+		if (lastOk !== false) {
+			lastOk = false;
+			notifyError(_('读取 NSS 状态失败：%s').format(why));
+		}
+		return { load: {}, stats: 'error' };
+	}
+
 	return callExec('/usr/libexec/rivwrt/nss-status', [ range || '2h' ]).then(function (res) {
+		/* 原实现在此无条件吞掉失败并返回空对象，于是 ACL 未生效、
+		   nss-status 缺失等情况只会表现为"图表一直空着"，且提示语是
+		   "首次采集需等待约 30 秒" —— 把故障说成正常等待。 */
+		if (!res || res.code !== 0) {
+			var detail = (res && res.stderr ? String(res.stderr).trim() : '') || _('无输出');
+			return failed(_('退出码 %s：%s').format(
+				(res && res.code !== undefined) ? res.code : '?', detail));
+		}
+		lastOk = true;
+
 		var out = { load: {} };
 		(res.stdout || '').split('\n').forEach(function (line) {
 			var m = line.match(/^([a-z_0-9]+)=(.*)$/);
@@ -475,7 +496,9 @@ function readStatus(range) {
 				out[m[1]] = m[2];
 		});
 		return out;
-	}).catch(function () { return { load: {} }; });
+	}).catch(function (err) {
+		return failed(err && err.message ? err.message : String(err));
+	});
 }
 
 function notifyError(msg) {
@@ -752,11 +775,13 @@ return view.extend({
 			: _('当前为内核软转发。bandix 统计准确，但吞吐低于硬件加速路径。启用后直连流量将由 NSS 接管。');
 
 		/* 频率档位高亮：当前档加 cbi-button-action（另见 render 注释：
-		   不用 [disabled]，主题会给它加 opacity，看着像失效） */
+		   不用 [disabled]，主题会给它加 opacity，看着像失效）。
+		   用 classList.toggle 而非整体重写 className —— 后者会把主题
+		   或 LuCI 后续可能附加的类一并抹掉。 */
 		var cur = (st.freqlevel === 'high') ? 'high' : 'mid';
 		var self = this;
 		Object.keys(this.modeBtn).forEach(function (k) {
-			self.modeBtn[k].className = 'btn' + (k === cur ? ' cbi-button-action' : '');
+			self.modeBtn[k].classList.toggle('cbi-button-action', k === cur);
 		});
 
 		this.cbAuto.setValue(auto ? '1' : '0');
@@ -768,22 +793,42 @@ return view.extend({
 		this.nowEl.textContent = (lv === null) ? '—' : lv.toFixed(1);
 	},
 
-	/* 画主图 */
+	/* 画主图。
+	   ★ 分两层：draw() 负责清空 svg 并【重建后补挂悬停层】，drawPlot() 只
+	     负责画图。原因：bindHover() 创建的准星(cross)与圆点(dot)也是 svg
+	     的子节点，若 draw() 清空后不补挂，首次轮询（5 秒）一过它们就从
+	     DOM 里消失 —— 悬停十字线永远不会再出现，且不报任何错（实测
+	     svg 子节点 27 → 25）。 */
 	draw: function () {
-		var svg = this.svg, W = 940, H = 238, L = 44, R = 14, T = 14, B = 30;
+		var svg = this.svg;
 		while (svg.firstChild) svg.removeChild(svg.firstChild);
+		this.drawPlot(svg);
+		if (this.cross) svg.appendChild(this.cross);
+		if (this.dot) svg.appendChild(this.dot);
+	},
+
+	drawPlot: function (svg) {
+		var W = 940, H = 238, L = 44, R = 14, T = 14, B = 30;
 
 		var h = this.hist, n = h.length;
 		this.geom = { W: W, H: H, L: L, R: R, T: T, B: B, n: n, t0: n ? h[0].t : 0, t1: n ? h[n - 1].t : 0 };
 		if (!n) {
 			var t0 = sx('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle',
 				'font-size': '13', fill: 'var(--text-subtle,#7f858b)' });
-			t0.textContent = _('暂无历史数据（首次采集需等待约 30 秒）');
+			/* 区分三种"没数据"：读取失败 / 根本采不到 / 还没采到。
+			   否则 debugfs 未就绪时页面会一直说"等待约 30 秒"，
+			   把故障说成正常等待。 */
+			t0.textContent = (this.st.stats === 'error')
+				? _('读取 NSS 状态失败（详见页面通知）')
+				: (this.st.stats === 'unavailable')
+					? _('NSS 统计不可用：debugfs 无 cpu_load_ubi（驱动未就绪或未加载）')
+					: _('暂无历史数据（首次采集需等待约 30 秒）');
 			svg.appendChild(t0);
 			this.footEl.textContent = '';
 			return;
 		}
-		var xOf = this.geom.xOf = function (i) { return L + (W - L - R) * i / (n - 1); };
+		var denom = Math.max(n - 1, 1);
+		var xOf = this.geom.xOf = function (i) { return L + (W - L - R) * i / denom; };
 		var yOf = this.geom.yOf = function (v) { return T + (H - T - B) * (1 - v / 100); };
 
 		/* Y 轴网格 + 刻度 */
@@ -799,9 +844,8 @@ return view.extend({
 			svg.appendChild(t);
 		});
 
-		/* 时间轴（5 刻度） */
-		var self = this;
-		for (var i = 0; i < 5; i++) {
+		/* 时间轴（5 刻度）。n<2 时不画：idx 恒为 0，5 个标签会叠在同一 x。 */
+		for (var i = 0; n >= 2 && i < 5; i++) {
 			var frac = i / 4, idx = Math.round(frac * (n - 1));
 			var x = xOf(idx);
 			svg.appendChild(sx('line', { x1: x, x2: x, y1: T, y2: H - B,
@@ -813,6 +857,21 @@ return view.extend({
 				fill: 'var(--text-subtle,#7f858b)' });
 			lt.textContent = fmtTime(h[idx].t, this.range);
 			svg.appendChild(lt);
+		}
+
+		/* 单点：monotone() 在 n<2 时返回空串，会让面积路径退化成
+		   " LNaN,… LNaN,… Z" 这类非法坐标（实测），整条曲线画不出来。
+		   此时改画一个点 + 数值，位置取绘图区水平居中。 */
+		if (n < 2) {
+			var cx0 = (L + W - R) / 2, cy0 = yOf(h[0].v);
+			svg.appendChild(sx('circle', { cx: cx0, cy: cy0, r: 4.5, fill: 'var(--brand,#0085b5)' }));
+			var lbl0 = sx('text', { x: cx0, y: cy0 - 12, 'text-anchor': 'middle',
+				'font-family': 'var(--font-mono,monospace)', 'font-size': '12',
+				fill: 'var(--brand,#0085b5)' });
+			lbl0.textContent = h[0].v.toFixed(1) + ' %';
+			svg.appendChild(lbl0);
+			this.footEl.textContent = _('仅 1 个采样点 · %s').format(_(LABEL[this.range] || ''));
+			return;
 		}
 
 		/* 渐变面积 */
@@ -847,12 +906,14 @@ return view.extend({
 			+ ' · ' + _(LABEL[this.range] || '');
 	},
 
-	/* 悬浮读数 */
+	/* 悬浮读数。
+	   cross/dot 挂在 this 上：draw() 每次重建 svg 后会按引用补挂回去，
+	   否则首次轮询(5s)一过悬停准星就消失。 */
 	bindHover: function () {
 		var self = this, wrap = this.wrap, svg = this.svg;
-		var cross = sx('line', { y1: 0, y2: 0, stroke: 'var(--brand,#0085b5)', 'stroke-width': 1,
+		var cross = this.cross = sx('line', { y1: 0, y2: 0, stroke: 'var(--brand,#0085b5)', 'stroke-width': 1,
 			'stroke-dasharray': '3 3', 'stroke-opacity': .55, visibility: 'hidden' });
-		var dot = sx('circle', { r: 4, fill: 'var(--brand,#0085b5)', stroke: 'var(--surface,#fff)',
+		var dot = this.dot = sx('circle', { r: 4, fill: 'var(--brand,#0085b5)', stroke: 'var(--surface,#fff)',
 			'stroke-width': 2, visibility: 'hidden' });
 		svg.appendChild(cross);
 		svg.appendChild(dot);
@@ -961,7 +1022,10 @@ cat > $PKGDIR/root/usr/libexec/rivwrt/nss-status <<'EOF'
 #!/bin/sh
 # RivWRT NSS 状态采集：输出 key=value 供 LuCI 页面解析
 # 用法：nss-status [range]   range ∈ 2h|12h|1d|1w（默认 2h，仅影响 history 段）
-echo "ts=$(date +%s)"
+# 输出字段与页面消费点一一对应：ecm / autostart / freq / freqlevel / stats /
+# load_<n> / hist。不输出页面不读的字段（此前多输出 ts、freqmode、histrange，
+# 属死代码：freqmode 恒为 Fixed——上游 qca-nss-pbuf 开机就把 auto_scale 锁 0，
+# 页面也已不再展示 Auto/Fixed）。
 
 # ── 引擎运行状态 ──
 # ECM 是内核模块：其 init.d 的 start_service() 只做 modprobe、未 procd_open_service，
@@ -999,11 +1063,6 @@ case "$FREQ" in
 	''|*[!0-9]*) : ;;
 	*) echo "freq=$(awk -v h="$FREQ" 'BEGIN{printf "%.1f", h/1000000}')" ;;
 esac
-if [ "$(cat /proc/sys/dev/nss/clock/auto_scale 2>/dev/null)" = "1" ]; then
-	echo "freqmode=Auto"
-else
-	echo "freqmode=Fixed"
-fi
 
 # ── 频率档位（上游 nss_freq 能力：mid=748.8MHz / high=1497.6MHz）──
 # 上游把档位存在 UCI nss_freq.settings.level，由 /etc/init.d/nss_freq 开机应用。
@@ -1033,7 +1092,6 @@ case "$RANGE" in
 	1w)  SPAN=604800 ;;
 	*)   SPAN=7200 ;;
 esac
-echo "histrange=$RANGE"
 RRD=$(ls /tmp/rrd/*/nss-load/gauge-core0.rrd 2>/dev/null | head -1)
 if [ -n "$RRD" ] && [ -x /usr/bin/rrdtool ]; then
 	# rrdtool fetch 输出为 "<时间戳>: <值>"（$1 自带尾冒号）；必须去掉，
