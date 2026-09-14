@@ -1,2 +1,17 @@
+# 仓库内所有文本文件一律以 LF 存取。
+#
+# 为什么必须钉死：本仓库的 .sh 会在 CI（Ubuntu）里被直接执行，而开发机是
+# Windows（core.autocrlf=true 会把检出内容转成 CRLF）。shell 脚本行尾带 CR
+# 会导致经典故障 —— 变量值沾上 \r、`exit 1\r` 之类报 "not found"。
+# Settings.sh 在 workflow 里靠 dos2unix 兜底，但 Scripts/ 下的开发期测试脚本
+# 不在 CI 里跑，没有兜底机会，所以这里直接规定 eol。
+#
+# *.js 也钉成 LF：Node/Bun 本身不挑行尾，但混着 CRLF 会让 git 每次操作都提示
+# "LF will be replaced by CRLF"，也容易在 diff 里产生整文件改动。
 *.txt text eol=lf
-*.sh text eol=lf
+*.sh  text eol=lf
+*.js  text eol=lf
+*.md  text eol=lf
+*.yml text eol=lf
+# 这个文件自己也要声明，否则它自己会触发同样的 CRLF 警告
+.gitattributes text eol=lf
