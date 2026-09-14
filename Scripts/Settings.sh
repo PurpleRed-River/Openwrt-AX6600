@@ -723,15 +723,23 @@ return view.extend({
 		autoNode.addEventListener('widget-change', L.bind(function () { this.toggleAuto(); }, this));
 		this.lbAuto = E('span', { 'class': 'rw-lb' });
 
+		/* 加速连接数：ECM 经 NSS 加速的连接条数（debugfs 计数器）。
+		   这是判断"NSS 到底有没有在干活"最直接的指标 —— 负载百分比在
+		   低流量时可能长时间贴 0，而连接数一旦有流量就会上去。
+		   ECM 未加载时取不到值，显示 "—"（不是 0）。 */
+		this.connEl = E('b', {}, '—');
+
 		var kpis = E('section', { 'class': 'rw-kpis' }, [
 			E('div', { 'class': 'rw-kpi' }, [ E('em', {}, _('频率档位')), this.modeEl ]),
 			E('div', { 'class': 'rw-kpi' }, [ E('em', {}, _('NSS 频率')),
 				E('div', { 'class': 'rw-v' }, [ this.freqEl, E('u', {}, 'MHz') ]) ]),
+			E('div', { 'class': 'rw-kpi' }, [ E('em', {}, _('加速连接数')),
+				E('div', { 'class': 'rw-v' }, [ this.connEl, E('u', {}, _('条')) ]) ]),
 			E('div', { 'class': 'rw-kpi rw-row' }, [ E('em', {}, _('开机自启')),
 				E('div', { 'class': 'rw-sw' }, [ this.lbAuto, autoNode ]) ])
 		]);
 
-		var note = E('p', { 'class': 'rw-note' }, _('停用 NSS 后直连流量回退内核软转发，bandix 的统计会变准确（NSS 加速的流量不计入其统计），但吞吐下降。防火墙页的「路由 / NAT 卸载」请保持「无」——NSS 独立工作，软件卸载会与之冲突。'));
+		var note = E('p', { 'class': 'rw-note' }, _('上图为 NSS 引擎的核心负载（%），不是流量速率：空闲时贴近 0 属正常，有大流量经过加速路径时才会抬升。要确认加速是否在工作，看「加速连接数」更直接。停用 NSS 后直连流量回退内核软转发，bandix 的统计会变准确（NSS 加速的流量不计入其统计），但吞吐下降。防火墙页的「路由 / NAT 卸载」请保持「无」——NSS 独立工作，软件卸载会与之冲突。'));
 
 		this.apply();
 		this.draw();
@@ -788,6 +796,10 @@ return view.extend({
 		this.lbAuto.textContent = auto ? _('已启用') : _('已关闭');
 
 		this.freqEl.textContent = st.freq || '—';
+
+		/* 连接数取不到（ECM 未加载）时显示 "—"：显示 0 会被误读为
+		   "加速正常但没有连接"，而实情可能是加速根本没在跑。 */
+		this.connEl.textContent = (st.conns === undefined || st.conns === '') ? '—' : st.conns;
 
 		var lv = this.live();
 		this.nowEl.textContent = (lv === null) ? '—' : lv.toFixed(1);
@@ -1083,6 +1095,34 @@ if [ -r "$D/cpu_load_ubi" ]; then
 else
 	echo "stats=unavailable"
 fi
+
+# ── NSS 加速连接数 ──
+# ECM 在 /sys/kernel/debug/ecm/ecm_db/ 下提供两个同源计数器，均由
+# ecm_db_connection_init() 创建，读的都是【当前】连接数快照
+# （ecm_db_connection_count，在 ecm_db_lock 下取），不是累计值：
+#     connection_count        —— u32，按 debugfs u32 语义读出为纯数字
+#     connection_count_simple —— 文本 "tcp X udp Y other Z total W"
+#   （源码 ecm_db/ecm_db_connection.c：后者由
+#    snprintf("tcp %d udp %d other %d total %d\n", ...) 生成）
+# 该 init 中任一 create 失败即返回 false → ecm_db 初始化失败 → ECM 整体
+# 不可用；故 ECM 一旦在跑（/proc/modules 有 ecm），这两文件必然存在。
+# 优先取前者免解析；若其内容不是纯数字，再从后者析出 total。两步都过数字
+# 校验，避免因格式差异让页面永远显示 "—"。
+#   ★ 这里踩过一次：先前只读 connection_count_simple 且按"纯数字"校验，
+#     而它实际是带标签的文本，case 校验必然拒绝 → conns 永不输出、页面恒 "—"。
+# ECM 未加载时两节点都不存在 → 不输出，页面显示 "—" 而非 0，以免把
+# "加速没在工作"误显示成"当前没有连接"。
+# 本脚本由 rpcd 以 root 执行，且这两文件本身即 S_IRUGO，权限无忧。
+C=$(cat /sys/kernel/debug/ecm/ecm_db/connection_count 2>/dev/null)
+case "$C" in
+	''|*[!0-9]*)
+		C=$(awk '{ for (i = 1; i < NF; i++) if ($i == "total") { print $(i + 1); exit } }' \
+			/sys/kernel/debug/ecm/ecm_db/connection_count_simple 2>/dev/null) ;;
+esac
+case "$C" in
+	''|*[!0-9]*) : ;;
+	*) echo "conns=$C" ;;
+esac
 
 # ── 历史序列（RRD；需 rrdtool1 包）──
 RANGE="${1:-2h}"
