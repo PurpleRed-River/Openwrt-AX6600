@@ -387,9 +387,7 @@ cat > $PKGDIR/root/usr/share/rpcd/acl.d/luci-app-rivwrt-nss.json <<'EOF'
 		"description": "Grant access to RivWRT NSS control and status",
 		"read": {
 			"ubus": {
-				"service": [ "list" ],
-				"file": [ "exec" ],
-				"rc": [ "list" ]
+				"file": [ "exec" ]
 			},
 			"file": {
 				"/usr/libexec/rivwrt/nss-status": [ "exec" ],
@@ -442,13 +440,18 @@ var callExec = rpc.declare({
 	params: [ 'command', 'params' ]
 });
 
-/* ★ 启停服务用 ubus 的 rc 对象，而非 file.exec 跑 /etc/init.d/*：
+/* 开关走 ubus 的 rc 对象（rc.init），而非 file.exec 跑 /etc/init.d/*：
    这是 LuCI 官方做法（luci-mod-system/startup.js 同款），
    无需在 acl 里逐条列举"含参数的完整命令"（rpcd 对 file.exec 的
-   鉴权要求 cmdline 精确匹配，脆弱且易错）。 */
-var callRcList = rpc.declare({
-	object: 'rc', method: 'list', expect: { '': {} }
-});
+   鉴权要求 cmdline 精确匹配，脆弱且易错）。
+
+   ★ 这里【只】用 rc.init，不用 rc.list 的 enabled 字段。
+     rc.c 的 rc_list_readdir() 解析 init 脚本时只读前 11 行
+     （count <= 10 上限），而 qca-nss-ecm.init 有 16 行版权头、
+     START=26 落在第 18 行 → rc.list 恒报 enabled=false，哪怕服务
+     确实会自启（LuCI 官方「系统→启动项」页对同一脚本同样误报）。
+     自启状态改由 nss-status 直接 glob /etc/rc.d/S??qca-nss-ecm 判定，
+     语义等同 rc.common 的 enabled()，详见该脚本内注释。 */
 var callRcInit = rpc.declare({
 	object: 'rc', method: 'init', params: [ 'name', 'action' ]
 });
@@ -461,41 +464,36 @@ function sx(tag, attrs) {
 }
 
 function readStatus(range) {
-	return Promise.all([
-		callExec('/usr/libexec/rivwrt/nss-status', [ range || '2h' ]).then(function (res) {
-			var out = { load: {} };
-			(res.stdout || '').split('\n').forEach(function (line) {
-				var m = line.match(/^([a-z_0-9]+)=(.*)$/);
-				if (!m) return;
-				if (m[1].indexOf('load_') === 0)
-					out.load[m[1].substring(5)] = m[2];
-				else
-					out[m[1]] = m[2];
-			});
-			return out;
-		}).catch(function () { return { load: {} }; }),
-
-		callRcList().catch(function () { return {}; })
-	]).then(function (r) {
-		var st = r[0], rc = r[1] && r[1]['qca-nss-ecm'];
-		/* 自启状态以 rc.list 为准：权威、且不依赖 file.exec 的鉴权 */
-		if (rc)
-			st.autostart = rc.enabled ? '1' : '0';
-		return st;
-	});
+	return callExec('/usr/libexec/rivwrt/nss-status', [ range || '2h' ]).then(function (res) {
+		var out = { load: {} };
+		(res.stdout || '').split('\n').forEach(function (line) {
+			var m = line.match(/^([a-z_0-9]+)=(.*)$/);
+			if (!m) return;
+			if (m[1].indexOf('load_') === 0)
+				out.load[m[1].substring(5)] = m[2];
+			else
+				out[m[1]] = m[2];
+		});
+		return out;
+	}).catch(function () { return { load: {} }; });
 }
 
 function notifyError(msg) {
 	ui.addNotification(null, E('p', {}, msg), 'error');
 }
 
-/* 经 ubus rc.init 执行 init 动作；失败时把原因提示给用户（不再静默）。 */
+/* 经 ubus rc.init 执行 init 动作。
+   ★ 注意 rc.init 的失败语义：rc.c 的 rc_init_cb() 忽略子进程退出码，
+     恒以 UBUS_STATUS_OK 完成请求 —— 即 /etc/init.d/xxx 自身的失败
+     （如 modprobe 报错）【不会】回传。此处 if (ret) 与官方 startup.js
+     写法一致，但它只在参数/权限等 ubus 层错误时才有意义；
+     脚本级失败靠随后的 refresh() 复核（状态没变即失败）。
+     catch 分支处理的才是真错误（rc 对象不存在、脚本权限校验不过等）。 */
 function control(action) {
 	var labels = { start: _('启用'), stop: _('停用'), enable: _('开启自启'), disable: _('关闭自启') };
 	var what = labels[action] || action;
 
 	return callRcInit('qca-nss-ecm', action).then(function (ret) {
-		/* rc.init 返回非 0 表示命令失败（LuCI startup.js 同判据） */
 		if (ret)
 			notifyError(_('%s失败（返回码 %s）').format(what, ret));
 		return true;
@@ -952,12 +950,23 @@ else
 	echo "ecm=stopped"
 fi
 
-# ── 开机自启（rc.common 标准命令，不依赖 procd 注册）──
-if /etc/init.d/qca-nss-ecm enabled >/dev/null 2>&1; then
-	echo "autostart=1"
-else
-	echo "autostart=0"
-fi
+# ── 开机自启 ──
+# ★ 不能取 ubus rc.list 的 enabled 字段：rc.c 的 rc_list_readdir() 解析
+#   init 脚本时只读前 11 行（count <= 10 上限），而 qca-nss-ecm.init 有
+#   16 行版权头，START=26 落在第 18 行 → rc.list 恒报 enabled=false
+#   （LuCI 官方「系统→启动项」页对同一脚本同样误报）。实测模拟该脚本
+#   在 rc.list 下的解析结果：start=-1，即永远走不到 enabled 判定。
+# ★ 也不 fork 执行 "/etc/init.d/qca-nss-ecm enabled"：rc.common 会加载
+#   functions.sh + service.sh 并 source 整个 175 行脚本，而本脚本由页面
+#   每 5 秒轮询一次，长期看不划算。
+# ★ rc.common 的 enabled() 判定本质就是"START 对应的 /etc/rc.d/S<START><name>
+#   符号链接是否存在"。此处直接 glob 该链接（?? 匹配任意两位编号，
+#   不写死 26），语义与官方一致，且零 fork。
+AUTOSTART=0
+for f in /etc/rc.d/S??qca-nss-ecm; do
+	[ -L "$f" ] && { AUTOSTART=1; break; }
+done
+echo "autostart=$AUTOSTART"
 
 # ── NSS 时钟（路径同上游 nss_diag）──
 FREQ=$(cat /proc/sys/dev/nss/clock/current_freq 2>/dev/null)
