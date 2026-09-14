@@ -209,8 +209,65 @@ fi
 # -------------------------------------------------------
 
 DTS_FILE="./target/linux/qualcommax/dts/ipq6010-re-cs-02.dts"
-sed -i "/&dp1 {/,/};/ s/label = \"lan1\"/label = \"wan\"/" "$DTS_FILE"
-sed -i "/&dp5 {/,/};/ s/label = \"wan\"/label = \"lan1\"/" "$DTS_FILE"
+
+# 端口命名最终形态（丝印 → 系统名）：
+#   丝印 WAN（2.5G）   → lan1
+#   丝印 LAN1（千兆）  → wan1
+#   丝印 LAN2（千兆）  → wan2   ← 第二条宽带
+#   丝印 LAN3 / LAN4   → lan3 / lan4
+#
+# 一条 sed 处理三处（多 -e 一次读写，避免中途状态被后续规则误伤）：
+#   &dp1 段：lan1 → wan1
+#   &dp5 段：wan  → lan1
+#   &dp2 段：lan2 → wan2
+# sed 的地址范围 /&dpN {/,/};/ 把每条规则限定在对应端口节点内，互不干扰。
+#
+# 注：DTS 里的 switch_lan_bmp / switch_wan_bmp 【不需要】跟着改 ——
+#     全树检索确认这两个属性只出现在各设备 DTS 中，没有任何 .c/.h 驱动读取，
+#     属 QSDK 遗留的装饰性属性；端口分组实际由 DTS 的 label + netifd 配置决定。
+sed -i \
+	-e "/&dp1 {/,/};/ s/label = \"lan1\"/label = \"wan1\"/" \
+	-e "/&dp2 {/,/};/ s/label = \"lan2\"/label = \"wan2\"/" \
+	-e "/&dp5 {/,/};/ s/label = \"wan\"/label = \"lan1\"/" \
+	"$DTS_FILE"
+
+# --- 同步默认网络配置（02_network）---
+# 上游对本设备写死 LAN = "lan1 lan2 lan3 lan4"、WAN = "wan"。改名后该列表里的
+# lan2 已不存在、wan 也不存在，会向 br-lan 塞入无效成员、并让 WAN 指向不存在的设备。
+#
+# 该行与 gl-ax1800 / nn6000-v2 / mr7350 / mr7500 / fap650 共用；本固件只编
+# jdcloud_re-cs-02，且已确认该字符串全树唯一，改动不影响其它设备。
+#
+# ★ 双 WAN 必须拆成两个独立接口：ucidef_set_interfaces_lan_wan 的 wan 参数若含
+#   空格会被当作 bridge 成员（读实现可知走的是 json_select_array "ports"），
+#   结果是"两个口桥成一个 WAN"而非两条独立上行，故 wan2 单独声明。
+#   proto 暂用 none：接线后在「网络 → 接口」里按实际线路选 DHCP/PPPoE。
+NW_BD="./target/linux/qualcommax/ipq60xx/base-files/etc/board.d/02_network"
+sed -i 's|ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 lan4" "wan"|ucidef_set_interfaces_lan_wan "lan1 lan3 lan4" "wan1"\n\t\tucidef_set_interface "wan2" device "wan2" protocol "none"|' "$NW_BD"
+
+# --- 防火墙 zone 纳入两条上行 ---
+# zone 的【名字】保持 wan 不动：firewall.config 里有 11 处 option src/dest 'wan'
+# 引用它（入站拒绝、转发拒绝、NAT 伪装等规则），改 zone 名要连带改这些引用，
+# 收益为零。只把它的 network 列表由 'wan' 换成 'wan1' 'wan2' —— 这样两条线路
+# 共用同一套 WAN 策略（masq、入站 REJECT、转发 REJECT）。
+FW_CFG="./package/network/config/firewall/files/firewall.config"
+if [ -f "$FW_CFG" ]; then
+	# 模式锚定整行：list   network<TAB><TAB>'wan' —— 不能只匹配 'wan'，
+	# 因为 option src 'wan' 等 11 处也有同样的引号形态。
+	sed -i "s|^\(\t*\)list   network\t\t'wan'$|\1list   network\t\t'wan1'\n\1list   network\t\t'wan2'|" "$FW_CFG"
+	# 断言：sed 未命中会静默不改，届时两条上行都进不了 wan zone（无 NAT、入站策略失效），
+	# 而这种错误在编译日志里看不出来，必须显式失败。
+	if grep -q "'wan1'" "$FW_CFG"; then
+		echo "RivWRT: firewall wan zone -> wan1 + wan2"
+	else
+		echo "RivWRT: ERROR - firewall zone patch missed (pattern drift?)" >&2
+		exit 1
+	fi
+else
+	echo "RivWRT: ERROR - $FW_CFG not found" >&2
+	exit 1
+fi
+
 
 # -------------------------------------------------------
 # RivWRT：daede 暗色屏蔽
@@ -218,6 +275,89 @@ sed -i "/&dp5 {/,/};/ s/label = \"wan\"/label = \"lan1\"/" "$DTS_FILE"
 
 CFG_JS=$(find ./package/luci-app-daede -name "config.js" 2>/dev/null | head -1)
 [ -n "$CFG_JS" ] && sed -i "s#document\.documentElement\.setAttribute('data-darkmode', 'true');#/* RivWRT: keep global dark-mode flag untouched */#" "$CFG_JS"
+
+# -------------------------------------------------------
+# RivWRT：mwan3 双 WAN 初始配置
+#
+# 直接覆盖包自带的 files/etc/config/mwan3（Settings.sh 在 Packages.sh 之后执行，
+# 包已克隆到位）——配置随包走，首启即生效，无需再挂一条 uci-defaults。
+# -------------------------------------------------------
+
+MWAN3_DIR="./package/mwan3"
+if [ -d "$MWAN3_DIR/files/etc/config" ]; then
+	cat > "$MWAN3_DIR/files/etc/config/mwan3" <<'RIVWRT_MWAN3'
+# RivWRT 多 WAN 配置（由 Scripts/Settings.sh 生成；上游默认值已被本文件取代）
+#
+# 【默认不接管流量】下面所有 rule 的 enabled 都是 0。当前只有一条宽带时让
+# mwan3 接管默认路由没有收益，只会多出与 dae / NSS 的 fwmark 交互面。
+# 接好第二条线、并在「网络 → 接口」里把 wan2 的协议配好之后，把
+# default_rule_v4 的 enabled 改成 1，负载均衡/故障切换才开始生效
+# （也可以直接在「网络 → 多WAN管理器」里调）。
+#
+# track_ip 换成国内稳定可达的地址：上游默认是 1.0.0.1 / 208.67.x.x 等，
+# 国内探测容易误判为"线路故障"从而错误切走流量。
+# 三个 IP + reliability 2 = 至少两个可达才算该线路健康。
+#
+# mmx_mask 0x3F00（bits 8-13）是 mwan3 默认值，用它标记"该走哪条 WAN"。
+# 若日后与 dae 的 fwmark 冲突，改这里即可（mwan3 会按新掩码重建规则）。
+
+config globals 'globals'
+	option mmx_mask '0x3F00'
+
+# --- 第一条线路：wan1（物理丝印 LAN1，千兆 dp1）---
+config interface 'wan1'
+	option enabled '1'
+	option family 'ipv4'
+	option reliability '2'
+	list track_ip '223.5.5.5'
+	list track_ip '119.29.29.29'
+	list track_ip '180.76.76.76'
+
+# --- 第二条线路：wan2（物理丝印 LAN2，千兆 dp2）---
+# enabled 0 = 尚未接线，不做探测（省一次持续 ping）。接线并配好协议后改 1。
+config interface 'wan2'
+	option enabled '0'
+	option family 'ipv4'
+	option reliability '2'
+	list track_ip '223.5.5.5'
+	list track_ip '119.29.29.29'
+	list track_ip '180.76.76.76'
+
+# --- 成员：等权，两条线路各占一半（weight 1:1）---
+# 想按带宽比分配就改 weight，例如 1000M + 500M → 2:1。
+config member 'wan1_m1_w1'
+	option interface 'wan1'
+	option metric '1'
+	option weight '1'
+
+config member 'wan2_m1_w1'
+	option interface 'wan2'
+	option metric '1'
+	option weight '1'
+
+# --- 策略 ---
+config policy 'balanced'
+	list use_member 'wan1_m1_w1'
+	list use_member 'wan2_m1_w1'
+
+config policy 'wan1_only'
+	list use_member 'wan1_m1_w1'
+
+config policy 'wan2_only'
+	list use_member 'wan2_m1_w1'
+
+# --- 规则：默认全部未启用（见文件头）---
+config rule 'default_rule_v4'
+	option enabled '0'
+	option dest_ip '0.0.0.0/0'
+	option family 'ipv4'
+	option use_policy 'balanced'
+RIVWRT_MWAN3
+	echo "RivWRT: mwan3 dual-WAN config applied (rules disabled by default)"
+else
+	echo "RivWRT: WARNING - ./package/mwan3 not found, mwan3 config skipped"
+fi
+
 
 # -------------------------------------------------------
 # RivWRT：uci-defaults 目标目录
@@ -243,12 +383,53 @@ chmod +x "$UDIR/96-rivwrt-fullcone"
 
 cat > "$UDIR/98-rivwrt-net-fix" <<'RIVWRT_NETFIX'
 #!/bin/sh
+# RivWRT 网口规范化（幂等；由 uci-defaults 在每次首启/升级后执行一次）
+#
+# 目标形态（物理丝印 → 系统接口名）：
+#   丝印 WAN (2.5G)  → lan1
+#   丝印 LAN1 (千兆) → wan1
+#   丝印 LAN2 (千兆) → wan2    ← 第二条宽带
+#   丝印 LAN3 / LAN4 → lan3 / lan4
+#
+# 除了新刷机的默认配置，本脚本还负责【保留配置升级】的迁移：
+# 旧固件的上行接口名是 wan，新固件叫 wan1。若不迁移，升级后 network.wan 仍在、
+# network.wan1 不存在，mwan3 找不到它要管理的接口 —— 表现为"双 WAN 配了但没生效"。
+# 这个失败是静默的，所以必须在这里处理掉，而不是留给用户排查。
+
+# --- 1) br-lan 成员：lan2 已改作 wan2，必须从网桥里剔除 ---
+# 不剔的话 br-lan 会带上一个不属于它的端口，且该口同时出现在两条上行里。
 for DEV in 0 1 2 3 4; do
 	NAME=$(uci -q get network.@device[$DEV].name)
-	[ "$NAME" = "br-lan" ] && uci set network.@device[$DEV].ports='lan1 lan2 lan3 lan4'
+	[ "$NAME" = "br-lan" ] && uci set network.@device[$DEV].ports='lan1 lan3 lan4'
 done
-uci -q set network.wan.device='wan'
-uci -q set network.wan6.device='wan'
+
+# --- 2) 旧接口名迁移 wan → wan1（仅当 wan1 尚不存在时执行）---
+if uci -q get network.wan >/dev/null 2>&1 && ! uci -q get network.wan1 >/dev/null 2>&1; then
+	uci -q rename network.wan=wan1
+	echo "RivWRT: migrated network.wan -> network.wan1"
+fi
+
+# --- 3) 确保两条上行齐备，且 device 指向正确的物理口 ---
+# 缺哪个补哪个（proto 用 none：接线后由用户在界面里按实际线路选 DHCP/PPPoE）
+if ! uci -q get network.wan1 >/dev/null 2>&1; then
+	uci -q set network.wan1=interface
+	uci -q set network.wan1.proto='none'
+fi
+uci -q set network.wan1.device='wan1'
+
+if ! uci -q get network.wan2 >/dev/null 2>&1; then
+	uci -q set network.wan2=interface
+	uci -q set network.wan2.proto='none'
+fi
+uci -q set network.wan2.device='wan2'
+
+# wan6（IPv6 上行）若存在，其承载应随 wan → wan1。
+# ★ 必须先 get 判断再 set：uci set 对不存在的 section 会直接创建，
+#   这里会凭空造出一个 wan6 接口。
+if uci -q get network.wan6 >/dev/null 2>&1; then
+	uci -q set network.wan6.device='wan1'
+fi
+
 uci commit network
 RIVWRT_NETFIX
 chmod +x "$UDIR/98-rivwrt-net-fix"

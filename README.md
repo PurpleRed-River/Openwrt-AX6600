@@ -19,7 +19,7 @@
 - [目录结构](#-目录结构)
 - [定制组件](#-定制组件)
 - [固件特性](#-固件特性)
-- [网口定义](#-网口定义已互换)
+- [网口定义](#-网口定义)
 - [默认参数](#-默认参数)
 - [云编译与刷机](#-云编译与刷机)
 - [使用指南](#-使用指南)
@@ -38,23 +38,26 @@ Scripts/
   Packages.sh                 第三方组件拉取
   nss-page-test.js            NSS 加速页面回归测试（前端）
   nss-status-test.sh          NSS 状态采集回归测试（后端解析）
+  rivwrt-netfix-test.sh       网口规范化回归测试（接口迁移）
 Docs/           刷机救砖教程等
 .github/workflows/           云编译工作流
 ```
 
 ### 开发期测试
 
-`Scripts/` 下两个测试脚本不参与固件构建，只在改 `Settings.sh` 时用来快速验证：
+`Scripts/` 下三个测试脚本不参与固件构建，只在改 `Settings.sh` 时用来快速验证：
 
 ```sh
-bun Scripts/nss-page-test.js    # 页面前端：轮询重绘、边界输入、状态渲染
-sh  Scripts/nss-status-test.sh  # 状态采集：debugfs 数据格式解析
+bun Scripts/nss-page-test.js      # 页面前端：轮询重绘、边界输入、状态渲染
+sh  Scripts/nss-status-test.sh    # 状态采集：debugfs 数据格式解析
+sh  Scripts/rivwrt-netfix-test.sh # 网口：br-lan 成员、旧接口名迁移
 ```
 
 它们直接从 `Settings.sh` 的 heredoc 里取出代码来跑（前端用 `bun`，后端用系统 `sh`），
-**不需要先编译固件**。存在的理由：NSS 页面的 bug 几乎都在动态行为与格式假设上 ——
-轮询若干次后悬停层被清掉、单点历史算出 `NaN` 坐标、采集失败被静默吞掉、
-ECM 连接数数据源是文本而非数字 —— 这些静态审阅看不出来，构建与语法检查也发现不了。
+**不需要先编译固件**。存在的理由：这几处的 bug 几乎都在动态行为与格式假设上 ——
+轮询若干次后悬停层被清掉、单点历史算出 `NaN` 坐标、ECM 连接数数据源是文本而非数字、
+升级后接口名迁移没生效导致 mwan3 静默失效 —— 这些静态审阅看不出来，
+构建与语法检查也发现不了。每个测试都用缺陷注入验证过（改回缺陷版本即失败）。
 
 ---
 
@@ -71,10 +74,18 @@ ECM 连接数数据源是文本而非数字 —— 这些静态审阅看不出�
 | **wolultra 网络唤醒** | [ones20250/packages](https://github.com/ones20250/packages) | 上游 wolplus 继任包 |
 | **ksmbd 文件共享** | 上游 feeds | 内核态 SMB，替换基座 Samba4（省 34MB） |
 | **NSS 加速管理页** | 本项目自建 `luci-app-rivwrt-nss` | 引擎开关 + 频率档位 + 负载历史（2h/12h/1d/1w）+ 加速连接数 |
+| **mwan3 多 WAN** | [dl12345/mwan3](https://github.com/dl12345/mwan3) + [界面](https://github.com/dl12345/luci-app-mwan3) | 双宽带负载均衡/故障切换（**nftables 版 3.6.12**，见下方说明） |
 | **podman-compose** | 本项目自建包（PyPI 1.6.0） | CLI 容器编排 |
 | **statistics / vnstat** | 上游 feeds | 历史图表 / 接口流量总量 |
 
 基座沿用上游：**NSS 硬件加速全套**、**firewall4/nftables**、ath11k 三频、内存水位调优、自动挂载。
+
+> **mwan3 版本说明（勿混用）**：本项目用的是 dl12345 维护的 **nftables 移植版 3.6.12**，
+> 不是 OpenWrt/ImmortalWrt 官方 feed 里的 **2.12.2**。两者不可互换 ——
+> 官方版依赖 `iptables` + `ipset`，本固件是 fw4/nftables（树内无 iptables），
+> 装上会拖入整套兼容层并与 fw4 争抢 netfilter。3.6.12 已改为独立 `table inet mwan3`。
+> `Scripts/Packages.sh` 会在克隆新版前先删除 feeds 中的同名旧包，避免双重定义；
+> LuCI 界面也必须用同一作者的移植版，否则配置结构与后端不匹配。
 
 ---
 
@@ -82,23 +93,28 @@ ECM 连接数数据源是文本而非数字 —— 这些静态审阅看不出�
 
 - **NSS 满血加速**：直连流量硬件转发（CPU 近零）；代理流量由 dae 内核态接管，互不抢道
 - **内核原生 BTF**：`CONFIG_DEBUG_INFO_BTF=y`，eBPF 程序开箱即用
-- **网口语义化**：DTS 层互换端口名，系统名 = 物理丝印 = 角色（见下表）
+- **网口语义化**：DTS 层重命名端口，系统名 = 物理丝印 = 角色（见下表）
+- **双 WAN 就绪**：丝印 LAN1/LAN2 为 `wan1`/`wan2`，已装 mwan3（负载均衡/故障切换），接线配好协议即可启用
 - **FullCone NAT**：游戏机/P2P 友好，默认开启（防火墙页可关）
 - **eMMC 寿命关怀**：数据盘独立分区 + 每周 fstrim + 高频写服务默认关闭
 - **无默认密码**：登录与 WiFi 均默认开放，首刷请立即加固
 
 ---
 
-## 🔌 网口定义（已互换）
+## 🔌 网口定义
 
 | 物理丝印 | 系统设备名 | 角色 |
 |---|---|---|
 | **2.5G**（原印 WAN） | `lan1` | **内网**（br-lan 成员） |
-| **LAN1**（千兆） | `wan` | **WAN**（接光猫） |
-| LAN2-LAN4（千兆） | `lan2`~`lan4` | 内网 |
+| **LAN1**（千兆） | `wan1` | **WAN 1**（接第一条宽带） |
+| **LAN2**（千兆） | `wan2` | **WAN 2**（接第二条宽带） |
+| LAN3 / LAN4（千兆） | `lan3` / `lan4` | 内网 |
 
-> 丝印 WAN 口 = 内网 2.5G 口；丝印 LAN1 = WAN 口。**光猫接丝印 LAN1**。
-> 通过 DTS 端口 label 互换实现（`Settings.sh` 构建期注入），刷机即生效。
+> **两条宽带分别接丝印 LAN1 与 LAN2**；丝印 WAN 那个 2.5G 口是内网口。
+> 端口改名由 DTS 的 `label` 在构建期注入（`Settings.sh`），刷机即生效。
+>
+> 保留配置升级时，旧的 `network.wan` 会在首启由 `98-rivwrt-net-fix` 自动迁移为
+> `network.wan1`（并补建 `wan2`）——不迁移的话 mwan3 找不到要管理的接口。
 
 ---
 
@@ -137,6 +153,44 @@ ECM 连接数数据源是文本而非数字 —— 这些静态审阅看不出�
 ---
 
 ## 📖 使用指南
+
+<details>
+<summary><b>多 WAN（双宽带负载均衡 / 故障切换）</b></summary>
+
+固件已装 **mwan3 3.6.12**（nftables 版）+ 其 LuCI 界面，页面在 **网络 → 多WAN管理器**。
+
+**接线**：第一条线接丝印 **LAN1**（`wan1`），第二条接丝印 **LAN2**（`wan2`）。
+
+**启用步骤**（固件默认**不接管流量**，因为单线时接管没有收益）：
+
+1. **网络 → 接口**：分别把 `wan1` / `wan2` 的协议按实际线路设为 `DHCP` 或 `PPPoE`
+   （PPPoE 需填账号密码）。出厂默认两条都是 `none`。
+2. **网络 → 多WAN管理器**：
+   - 确认 `wan1`、`wan2` 两个接口都启用（`wan2` 默认未启用，接线后打开）
+   - 启用 `default_rule_v4` 规则（或新建一条），策略选 `balanced`
+3. 保存应用后，mwan3 才开始在两条线上分流。
+
+**预置的策略**（在 mwan3 配置里已生成，直接用）：
+
+| 策略 | 含义 |
+|---|---|
+| `balanced` | 两条等权分流（weight 1:1）。想按带宽比分配就改 member 的 weight，如 1000M+500M → 2:1 |
+| `wan1_only` | 全部走第一条 |
+| `wan2_only` | 全部走第二条 |
+
+**线路健康探测**：`track_ip` 已改为国内可达的 `223.5.5.5 / 119.29.29.29 / 180.76.76.76`
+（上游默认是 1.0.0.1、208.67.x.x 等，国内探测容易误判成"线路故障"而错误切走流量）。
+三个 IP + `reliability 2` = 至少两个可达才算健康。
+
+**与代理/NSS 的关系**：
+
+- **NSS**：直连流量由硬件转发，ECM 在连接建立时只需一次确定的路由决策，与 mwan3 不冲突。
+- **dae**：其配置里 `wan_interface` 默认是 `auto`，**双 WAN 下建议显式写成
+  `wan_interface: wan1, wan2`**，否则 dae 可能只认一条出口。
+  dae 的 eBPF 分流与 mwan3 的 fwmark 标记理论上是两个维度（前者"走不走代理"、
+  后者"走哪条宽带"），若实测有冲突，调整 mwan3 的 `mmx_mask`（默认 `0x3F00`）。
+
+</details>
 
 <details>
 <summary><b>NSS 加速与代理的分工</b></summary>

@@ -11,6 +11,9 @@
 #                 dae/daed/luci-app-daede/vmlinux-btf 四子包）
 #   partexp       sirpdboy/luci-app-partexp        分区扩容 Web 工具
 #   wolultra      ones20250/packages               网络唤醒（pkg-exact）
+#   mwan3         dl12345/mwan3                    多 WAN 负载均衡（nftables 版，
+#                 openwrt-25.12 分支；★ 非 feeds 里的 2.x iptables 旧版）
+#   luci-app-mwan3 dl12345/luci-app-mwan3          mwan3 界面（须与后端同源）
 #
 # 新增组件：仿照下方 UPDATE_PACKAGE 调用（仓库/分支/提取模式），
 # 配套 CONFIG_PACKAGE_ 行加到 Config/GENERAL_AX6600_RIVWRT.txt。
@@ -133,6 +136,29 @@ UPDATE_PACKAGE "wolultra" "ones20250/packages" "main" "pkg-exact" "luci-app-wolu
 
 # RivWRT：分区扩容挂载插件（Web 界面一键格式化/扩容/挂载剩余存储）
 UPDATE_PACKAGE "partexp" "sirpdboy/luci-app-partexp" "main" "pkg"
+
+# RivWRT：mwan3 多 WAN 负载均衡 / 故障切换
+#
+# ★★ 版本必须区分清楚，这里用的是 dl12345 的 nftables 移植版，不是 feeds 里的旧版：
+#      feeds（immortalwrt/openwrt packages）  mwan3 2.12.2 = iptables + ipset 时代
+#      dl12345/mwan3   (openwrt-25.12 分支)   mwan3 3.6.12 = nftables + ucode
+#    本固件是 fw4/nftables（树内无 iptables），2.12.2 会拖进整套 iptables 兼容层
+#    且与 fw4 争抢 netfilter，因此绝不能用 feeds 里的旧版。
+#    3.6.12 已改为独立 `table inet mwan3`（不再侵入 fw4 的 table），这也是新版的行为。
+#
+#    依赖（15 项）已核对：现有固件已含 12 项；缺的 3 项在树内、由 +DEPENDS 自动拉入 ——
+#      libnetfilter-conntrack（package/libs/）· libmnl（被前者 +DEPENDS 带入）
+#      ucode-mod-socket（ucode 包的 UcodeModule 宏生成）
+#    另 PKG_BUILD_DEPENDS: libnetfilter_conntrack libmnl（构建期，随上面两项进 staging）。
+#
+#    下行的删除步骤按 *mwan3* 通配扫 feeds，会同时命中 feeds/packages/net/mwan3 与
+#    feeds/luci/applications/luci-app-mwan3，正好把旧版清掉（避免同名包双重定义）；
+#    它只扫 ../feeds/ 不扫当前目录，故不会误删刚克隆的包。
+UPDATE_PACKAGE "mwan3" "dl12345/mwan3" "openwrt-25.12"
+# RivWRT：mwan3 的 LuCI 界面（同作者的 nftables 移植版）
+# ★ 必须与后端同源：feeds 里的 luci-app-mwan3 配的是 2.x 的配置结构，
+#   与 3.6.12 的后端不匹配。
+UPDATE_PACKAGE "luci-app-mwan3" "dl12345/luci-app-mwan3" "openwrt-25.12"
 
 #UPDATE_PACKAGE "luci-app-tailscale" "asvow/luci-app-tailscale" "main"
 

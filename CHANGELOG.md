@@ -122,6 +122,64 @@
 
 ---
 
+## 2026-09-14 · 双 WAN（mwan3）与网口重命名
+
+### 网口
+
+丝印 **LAN2**（dp2）改为第二条上行 `wan2`；丝印 LAN1 的上行由 `wan` 更名为 `wan1`
+（与 wan2 成对，语义更清楚）。最终形态：
+
+| 丝印 | 系统名 | 角色 |
+|---|---|---|
+| WAN (2.5G) | `lan1` | 内网 |
+| LAN1 (千兆) | `wan1` | 上行 1 |
+| LAN2 (千兆) | `wan2` | 上行 2 |
+| LAN3 / LAN4 | `lan3` / `lan4` | 内网 |
+
+- DTS：`Settings.sh` 用一条多 `-e` 的 sed 同时改 dp1/dp2/dp5 的 label。
+  DTS 里的 `switch_lan_bmp`/`switch_wan_bmp` **不动** —— 全树检索确认它们只出现在
+  各设备 DTS 中、没有任何驱动读取，是 QSDK 遗留的装饰属性。
+- `02_network`：LAN 列表去掉 lan2；`wan2` 单独声明为独立接口。
+  ★ 不能用 `ucidef_set_interfaces_lan_wan` 的 wan 参数塞两个设备 ——
+  该函数见空格即走 `json_select_array "ports"`，会把两个口桥成一个 WAN。
+- 防火墙：zone **名保持 `wan`**（`firewall.config` 里有 11 处 `option src/dest 'wan'`
+  引用它），只把 `list network` 由 `'wan'` 换成 `'wan1' 'wan2'`。
+- `98-rivwrt-net-fix` 重写为幂等的网口规范化脚本：剔除 br-lan 里的 lan2、
+  把旧 `network.wan` 迁移为 `network.wan1`、补建 `wan2`。
+  迁移是为了**保留配置升级**：不迁移则 mwan3 找不到 wan1，静默失效。
+
+### 组件
+
+- **mwan3 3.6.12**（dl12345/mwan3，`openwrt-25.12` 分支）+ 同作者 LuCI 界面。
+  ★ 与 feeds 里的 **2.12.2** 是两回事：旧版依赖 iptables+ipset，与本固件的
+  fw4/nftables 不合；`Packages.sh` 会先删 feeds 同名包再克隆新版。
+  依赖 15 项中 12 项已有，缺的 `libnetfilter-conntrack` / `libmnl` /
+  `ucode-mod-socket` 均在树内、由 `+DEPENDS` 自动拉入。
+- Config 增 `CONFIG_PACKAGE_mwan3=y` 与 `CONFIG_PACKAGE_luci-app-mwan3=y`。
+
+### mwan3 初始配置
+
+`Settings.sh` 覆盖包自带的 `/etc/config/mwan3`：
+
+- **默认不接管流量**（所有 rule `enabled 0`）——单线时接管无收益，只增加
+  fwmark 交互面。接线并配好协议后启用 `default_rule_v4` 即可。
+- `track_ip` 改为国内可达的 `223.5.5.5 / 119.29.29.29 / 180.76.76.76`
+  （上游默认 1.0.0.1、208.67.x.x 等，国内会误判线路故障而错误切走流量）。
+- 预置 `balanced`（等权）/ `wan1_only` / `wan2_only` 三个策略。
+- `wan2` 的接口项默认 `enabled 0`（未接线不做探测）。
+
+### 测试
+
+- 新增 `Scripts/rivwrt-netfix-test.sh`（14 项）：覆盖新刷机、保留配置升级、
+  幂等、wan6 处理四种场景。已用缺陷注入验证有效性（去掉迁移或去掉 br-lan
+  剔除即失败）。
+- 过程中修掉自己的 mock 两处错误，值得记录：① 函数末尾 `return 0` 会覆盖
+  `uci -q get` 的退出码，使"键不存在"被判成存在、迁移分支全被跳过（测试假通过）；
+  ② 删旧键用 `grep -v "^$key="` 时，键中的 uci 匿名段语法 `[0]` 被 grep 当字符类，
+  旧行删不掉、读回旧值。两处都已改为语义正确的实现并写入注释。
+
+---
+
 ## 上游历史（fork 自 ones20250/Openwrt-AX6600）
 
 上游按 PURE（纯净）/ PLUS（预装 OpenClash、PassWall2、Docker 等）双版本发布，机制详见上游仓库。
