@@ -189,8 +189,16 @@ RIVWRT_BANNER
 RELEASE_FILE="./package/base-files/files/etc/openwrt_release"
 if [ -f "$RELEASE_FILE" ]; then
 	sed -i "s/^DISTRIB_ID=.*/DISTRIB_ID='RivWRT'/" "$RELEASE_FILE"
-	sed -i "s/^DISTRIB_DESCRIPTION=.*/DISTRIB_DESCRIPTION='RivWRT %V %C'/" "$RELEASE_FILE"
-	echo "RivWRT: openwrt_release branded (DISTRIB_ID/DESCRIPTION)"
+	# 把构建时间戳一并写进版本描述：设备上 `cat /etc/openwrt_release` 或
+	# LuCI 概览页即可直接核对刷的是哪个 release（与 release tag / 固件文件名
+	# 里的时间戳是同一个值，来自 CI 的 WRT_DATE）。
+	# 起因：此前版本描述只有模糊的 %V/%C，实测出现过"以为刷了新版、其实刷了旧版"
+	# 的困扰 —— 旧构建里 luci-app-mwan3 因 Makefile 路径问题未编入，却被当成
+	# "新代码没生效"排查了很久。有了这个时间戳，一眼可辨。
+	# WRT_DATE 缺失时（本地模拟）退回 dev，不留空括号。
+	BUILD_TAG="${WRT_DATE:-dev}"
+	sed -i "s/^DISTRIB_DESCRIPTION=.*/DISTRIB_DESCRIPTION='RivWRT %V %C build-${BUILD_TAG}'/" "$RELEASE_FILE"
+	echo "RivWRT: openwrt_release branded (DISTRIB_ID/DESCRIPTION, build=$BUILD_TAG)"
 fi
 # -------------------------------------------------------
 # RivWRT：内核分区尺寸适配（A 槽 12MiB 内核）

@@ -11,6 +11,7 @@
 *.txt text eol=lf
 *.sh  text eol=lf
 *.js  text eol=lf
+*.py  text eol=lf
 *.md  text eol=lf
 *.yml text eol=lf
 # 这个文件自己也要声明，否则它自己会触发同样的 CRLF 警告
