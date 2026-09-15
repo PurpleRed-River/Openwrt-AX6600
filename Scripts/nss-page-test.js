@@ -77,7 +77,16 @@ const document = { createElementNS: (ns, tag) => new El(tag) };
 
 function E(tag, attrs, children) {
 	const el = new El(tag);
-	if (attrs) for (const k in attrs) el.attrs[k] = attrs[k];
+	if (attrs) for (const k in attrs) {
+		el.attrs[k] = attrs[k];
+		/* 复刻 luci-base 的 dom.attr()：函数值走 addEventListener(key, fn)，
+		   非函数值走 setAttribute。我们的 stub 是 El.addEventListener 空实现，
+		   所以这里额外把处理器存进 el.handlers，供断言检查绑定是否真的发生
+		   （否则"按钮挂了 click"这类断言会因 attrs 里看不到而误判）。 */
+		if (typeof attrs[k] === 'function') {
+			(el.handlers || (el.handlers = {}))[k] = attrs[k];
+		}
+	}
 	(function add(c) {
 		if (c === null || c === undefined || c === false || c === true) return;
 		if (Array.isArray(c)) return c.forEach(add);
@@ -229,6 +238,21 @@ const HIST3 = ['hist=1757800000:5.0,1757800030:7.5,1757800060:6.0'];
 	check('标签为 748.8/1497.6 MHz',
 		page.modeEl.children[0].textContent === '748.8 MHz' && page.modeEl.children[1].textContent === '1497.6 MHz');
 	check('按钮类含 btn', page.modeEl.children.every((b) => /\bbtn\b/.test(b.className)));
+	/* ★ 回归：曾用 ui.createHandlerFn(self, function () {...}) —— 该工厂内部读
+	   arguments[args.length].currentTarget，传匿名函数时为 undefined → 抛 TypeError，
+	   点击完全无反应。故这里断言 click 是自带事件处理的普通函数：能接收 ev 且自行
+	   做禁用/恢复，不依赖外部工厂。
+	   判定方式：给一个假的 ev（含 currentTarget）调用它，若抛错或没消费 ev 即失败。 */
+	check('档位按钮 click 自带事件处理（不依赖 createHandlerFn）', page.modeEl.children.every((b) => {
+		if (typeof b.attrs.click !== 'function') return false;
+		if (b.attrs.click.length < 1) return false;      // 未声明 ev 形参
+		const fake = { currentTarget: b, preventDefault() {} };
+		try {
+			const r = b.attrs.click(fake);
+			if (r && typeof r.then === 'function') r.catch(() => {});
+			return true;
+		} catch (e) { return false; }
+	}));
 	check('type=button（不误触发表单提交）', page.modeEl.children.every((b) => b.attrs.type === 'button'));
 	check('mid 档高亮', page.modeBtn.mid.classList.contains('cbi-button-action'));
 	check('high 档未高亮', !page.modeBtn.high.classList.contains('cbi-button-action'));

@@ -482,14 +482,88 @@ if ! uci -q get network.wan2 >/dev/null 2>&1; then
 fi
 uci -q set network.wan2.device='wan2'
 
-# wan6（IPv6 上行）若存在，其承载应随 wan → wan1。
-# ★ 必须先 get 判断再 set：uci set 对不存在的 section 会直接创建，
-#   这里会凭空造出一个 wan6 接口。
-if uci -q get network.wan6 >/dev/null 2>&1; then
+# --- 4) IPv6 上行 wan6 ---
+# qualcommax 平台的 991_set-network.sh 会执行 `uci set network.wan6.reqaddress`，
+# 而 uci set 对不存在的 section 会【直接创建】—— 它自己造出一个 wan6 却没设
+# device/proto，于是留下一个无设备的空接口（实测反馈"多出来一个 wan6"，
+# 在 LuCI 里显示异常，IPv6 也不工作）。
+# 这里先把它建完整。98 必定早于 991 执行（字典序 '8' < '9'），991 随后只是
+# 在这基础上补 reqaddress/reqprefix，不会再产生空壳 —— 这样就不依赖对
+# uci-defaults 排序细节的推断。
+# 若不需要 IPv6：在「网络 → 接口」里禁用 wan6，或 uci delete network.wan6。
+if ! uci -q get network.wan6 >/dev/null 2>&1; then
+	uci -q set network.wan6=interface
 	uci -q set network.wan6.device='wan1'
+	uci -q set network.wan6.proto='dhcpv6'
+else
+	# 已存在（保留配置升级）：补缺失字段，并把【旧接口名】迁到新名。
+	# 注意不能只判空：旧固件的 device 是 wan（已改名），若不迁则 wan6 指向
+	# 不存在的设备 —— 与 wan1/wan2 的迁移同理，静态看也不会报错。
+	_w6dev=$(uci -q get network.wan6.device)
+	case "$_w6dev" in
+		""|wan) uci -q set network.wan6.device='wan1' ;;
+	esac
+	_w6proto=$(uci -q get network.wan6.proto)
+	if [ -z "$_w6proto" ] || [ "$_w6proto" = "none" ]; then
+		uci -q set network.wan6.proto='dhcpv6'
+	fi
 fi
 
 uci commit network
+
+# --- 5) 修正 /etc/board.json 的端口信息（影响 LuCI 端口卡片与区域显示）---
+# 背景：LuCI 首页「端口状态」（luci-mod-status 的 view/status/include/29_ports.js）
+# 的端口列表来自 ubus `luci.getBuiltinEthernetPorts`，该接口对非 x86/ARM 平台
+# （qualcommax 属于此类）只从 /etc/board.json 读 `network.lan` 与 `network.wan`
+# 两个角色 —— 【wan2 不在其中，因此永远不显示】；而 board.json 在保留配置升级
+# 时被保留（preinit 的 82_config_generate 只在文件不存在时才重新生成），于是
+# 端口名还停留在旧值（含已不存在的 lan2、上行仍叫 wan）。
+#
+# 为什么这里改它是安全的：config_generate 第一件事就是
+#     [ -s /etc/config/network -a -s /etc/config/system ] && exit 0
+# 即 /etc/config/network 已存在时它直接退出，不再用 board.json 生成网络配置。
+# 本脚本跑在 uci-defaults 阶段，此时 network 配置已就绪，故改 board.json
+# 只影响 LuCI 显示，不会动到网络行为。
+#
+# 写法要点：lan 用 ports（对应 br-lan 成员），wan 也用 ports —— LuCI 的取值逻辑是
+#     if (type(board.network[k].ports) == 'array') for (let ifname in ports) push(...)
+# 用数组才能显示多个；且 ucode 的 for..in 对数组返回【元素】而非索引
+# （见 ucode 文档 for (arr in arrays) { push(result, ...arr) }），所以显示的是
+# 端口名本身而不是 0/1/2。
+BOARD_JSON=/etc/board.json
+if [ -f "$BOARD_JSON" ] && command -v ucode >/dev/null 2>&1; then
+	_bj_tmp="${BOARD_JSON}.new"
+	if ucode -e '
+		let fd = open("/etc/board.json", "r");
+		if (!fd) exit(1);
+		let b = json(fd);
+		fd.close();
+		b.network = b.network || {};
+		b.network.lan = { "protocol": "static", "ports": [ "lan1", "lan3", "lan4" ] };
+		b.network.wan = { "protocol": "dhcp", "ports": [ "wan1", "wan2" ] };
+		printf("%J", b);
+	' > "$_bj_tmp" 2>/dev/null && [ -s "$_bj_tmp" ]; then
+		# 落盘前校验：必须是合法 JSON，且含预期端口（防止半截写入把 board.json 弄坏）
+		if ucode -e '
+			let fd = open("/etc/board.json.new", "r");
+			if (!fd) exit(1);
+			let b = json(fd);
+			fd.close();
+			let w = b?.network?.wan?.ports, l = b?.network?.lan?.ports;
+			exit((type(w) == "array" && index(w, "wan2") != -1
+			      && type(l) == "array" && index(l, "lan1") != -1) ? 0 : 1);
+		' 2>/dev/null; then
+			mv -f "$_bj_tmp" "$BOARD_JSON"
+			echo "RivWRT: board.json 端口信息已更新（lan1 lan3 lan4 / wan1 wan2）"
+		else
+			rm -f "$_bj_tmp"
+			echo "RivWRT: WARNING - board.json 校验未通过，保持原样" >&2
+		fi
+	else
+		rm -f "$_bj_tmp"
+		echo "RivWRT: WARNING - board.json 重写失败，保持原样" >&2
+	fi
+fi
 RIVWRT_NETFIX
 chmod +x "$UDIR/98-rivwrt-net-fix"
 
@@ -904,11 +978,27 @@ return view.extend({
 
 		/* ── 图表卡 ── */
 		this.segEl = E('div', { 'class': 'rw-seg' });
+		/* ★ 不用 ui.createHandlerFn(fn) 包匿名函数：该工厂内部依赖
+		   `arguments[args.length].currentTarget`（见 luci-base 的 ui.js），
+		   传匿名函数时不接收事件参数 → currentTarget 为 undefined →
+		   读 .classList 抛 TypeError，点击完全无反应（实测反馈"页面功能要修"）。
+		   官方全部用法都是 createHandlerFn(self, '方法名', ...参数)，靠方法签名
+		   接住事件；这里改用普通函数，结构最简单也最稳。
+		   顺带自带"正在处理"状态（禁用 + 转圈），等价于原工厂的附加行为。 */
 		Object.keys(RANGES).forEach(function (r) {
 			self.segEl.appendChild(E('button', {
 				'data-range': r,
 				'aria-selected': (r === '2h') ? 'true' : 'false',
-				'click': ui.createHandlerFn(self, function () { return self.setRange(r); })
+				'click': function (ev) {
+					var btn = ev.currentTarget;
+					if (btn.disabled) return;
+					btn.disabled = true;
+					btn.classList.add('spinning');
+					Promise.resolve(self.setRange(r)).finally(function () {
+						btn.classList.remove('spinning');
+						btn.disabled = false;
+					});
+				}
 			}, _(RANGES[r])));
 		});
 
@@ -952,7 +1042,17 @@ return view.extend({
 			var btn = E('button', {
 				'type': 'button',
 				'class': 'btn',
-				'click': ui.createHandlerFn(self, function () { return self.setLevel(m[0]); })
+				/* 同时间范围按钮：用普通函数而非 ui.createHandlerFn（理由见上方注释） */
+				'click': function (ev) {
+					var b = ev.currentTarget;
+					if (b.disabled) return;
+					b.disabled = true;
+					b.classList.add('spinning');
+					Promise.resolve(self.setLevel(m[0])).finally(function () {
+						b.classList.remove('spinning');
+						b.disabled = false;
+					});
+				}
 			}, _(m[1]));
 			self.modeBtn[m[0]] = btn;
 			self.modeEl.appendChild(btn);
@@ -1325,7 +1425,12 @@ echo "freqlevel=$(uci -q get nss_freq.settings.level || echo mid)"
 # （非行内首个百分比那列 = Min；也不像上游 sbin/cpuusage 那样
 #   硬编码 "NR==6"，避免行数变化时取空）。
 D=/sys/kernel/debug/qca-nss-drv/stats
-mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+# 用「统计文件是否可读」判断，而不是 `mountpoint -q /sys/kernel/debug` ——
+# busybox 的 MOUNTPOINT 默认不编译（BUSYBOX_DEFAULT_MOUNTPOINT=n），设备上
+# 没有这个命令，会往 stderr 吐 "mountpoint: not found"（实测）。
+# 而且这里真正关心的是"能不能读那个文件"，不是"debugfs 挂没挂"。
+# 已挂载时再 mount 会返回 EBUSY，被 2>/dev/null 吞掉，无副作用。
+[ -r "$D/cpu_load_ubi" ] || mount -t debugfs none /sys/kernel/debug 2>/dev/null
 if [ -r "$D/cpu_load_ubi" ]; then
 	echo "stats=ok"
 	awk '
@@ -1420,7 +1525,10 @@ cat > "$WIFI_INIT" <<'RIVWRT_WIFI'
 #   会把三个 radio 一起重启，再次制造三路并发竞争（反而加剧问题）。
 #   必须用 `ubus call network.wireless {down,up} {"device":"radioN"}` 逐个来。
 START=99
-MARKER=/etc/.rivwrt-wifi-named
+# ★ marker 名带版本号，本身就是"迁移版本"：每次改动无线固化逻辑就 bump 一次，
+#   让已刷机的设备在下次启动时重跑一遍（否则旧的 marker 会让新逻辑永不执行）。
+#   v1 → v2：补上 disabled 清理（见 start() 第 0 步）。
+MARKER=/etc/.rivwrt-wifi-v2
 REBOOT_GUARD=/etc/.rivwrt-wifi-rebooted
 
 # 逐 radio 的 upsert（不触发 netifd 全量 reload）
@@ -1454,8 +1562,25 @@ start() {
 		i=$((i+1)); sleep 2
 	done
 
-	# ── 参数比对（仅不符才改）──
+	# ── 0) 清掉 disabled（radio 与 iface 两层）──
+	# ★ 必要性：本脚本的 list_radios() 会跳过 disabled 的 radio，于是被禁用的
+	#   radio 对【整个流程】不可见 —— 参数不设、不重启、最终"全部就绪"复核也
+	#   跳过它，脚本会认为一切正常并落下 marker。实测反馈"无线两个 5G 默认
+	#   已禁用"正是此情形：radio 层 disabled=1（多来自早期固件 5G 起不来时
+	#   的遗留配置），而 mac80211.uc 只在 iface 层注入 disabled=0，radio 层不管。
+	#   必须在参数比对之前做，后续步骤才能看见这些 radio。
+	#   仅首启执行一次（受 marker 保护），用户之后的手动调整不会被覆盖。
 	CHANGED=0
+	DISABLED_FIXED=""
+	for SEC in $(uci -q show wireless | sed -n 's/^wireless\.\([a-z_0-9]*\)=wifi-[a-z]*$/\1/p'); do
+		[ "$(uci -q get wireless.$SEC.disabled)" = "1" ] || continue
+		uci -q set wireless.$SEC.disabled='0'
+		DISABLED_FIXED="$DISABLED_FIXED $SEC"
+		CHANGED=1
+	done
+	[ -n "$DISABLED_FIXED" ] && logger -t rivwrt-wifi "已重新启用被禁用的无线段:$DISABLED_FIXED"
+
+	# ── 参数比对（仅不符才改）──
 	for RADIO in $(list_radios); do
 		BAND=$(uci -q get wireless.$RADIO.band)
 		IFACE=$(uci -q show wireless | sed -n "s/^wireless\.\([a-z_0-9]*\)\.device=$RADIO$/\1/p" | head -1)
@@ -1585,10 +1710,12 @@ cat > "$NSSSTAT_INIT" <<'RIVWRT_NSSSTAT'
 START=25
 start() {
 	# 等 NSS 驱动建好 debugfs 节点（最多 60s）
+	# 同 nss-status：不用 mountpoint（busybox 默认不编译该 applet），
+	# 改为「文件可读就跳过，否则尝试挂载」——已挂载时 mount 返回 EBUSY，无害。
 	i=0
 	while [ $i -lt 30 ]; do
 		[ -r /sys/kernel/debug/qca-nss-drv/stats/cpu_load_ubi ] && break
-		mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug 2>/dev/null
+		mount -t debugfs none /sys/kernel/debug 2>/dev/null
 		i=$((i+1)); sleep 2
 	done
 	F=/sys/kernel/debug/qca-nss-drv/stats/cpu_load_ubi

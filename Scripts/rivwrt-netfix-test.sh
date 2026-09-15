@@ -28,7 +28,9 @@ SH="$HERE/Settings.sh"
 MOCK="$HERE/.netfix-test.$$"
 CFG="$MOCK/uci.db"
 mkdir -p "$MOCK"
-trap 'rm -rf "$MOCK"' EXIT INT TERM
+# 清理临时目录。除常规信号外也覆盖 HUP/PIPE —— 脚本被 head 等截断管道时会收到
+# SIGPIPE，只 trap EXIT 在部分 shell 下不触发，会留下 .netfix-test.$$ 残留目录。
+trap 'rm -rf "$MOCK"' EXIT INT TERM HUP PIPE
 
 [ -f "$SH" ] || { echo "找不到 $SH"; exit 1; }
 
@@ -121,22 +123,53 @@ ck "wan2 section 未被重复创建" "$(grep -c '^network\.wan2=' "$CFG")" "1"
 ck "未产生 network.wan= 残留" "$(grep -c '^network\.wan=' "$CFG")" "0"
 
 echo ""
-echo "───────── 场景 D：wan6 处理 ──"
+echo "───────── 场景 D：wan6（IPv6 上行，修平台 991 造空壳的问题）──"
+# 背景：qualcommax 的 991_set-network.sh 执行 `uci set network.wan6.reqaddress`，
+# uci set 对不存在的 section 会直接创建 —— 于是留下一个既无 device 也无 proto
+# 的空接口（实测反馈"多出来一个 wan6"）。本脚本在 98-（早于 991）先建完整。
+
+# D1：wan6 不存在 → 建完整
+cat > "$CFG" <<'EOF'
+network.wan1=interface
+network.wan1.device=wan1
+EOF
+run
+ck "D1 无 wan6 时创建 device=wan1" "$(uci -q get network.wan6.device)" "wan1"
+ck "D1 无 wan6 时创建 proto=dhcpv6" "$(uci -q get network.wan6.proto)" "dhcpv6"
+
+# D2：wan6 存在但 device 是旧接口名 → 随迁
 cat > "$CFG" <<'EOF'
 network.wan1=interface
 network.wan1.device=wan1
 network.wan6=interface
 network.wan6.device=wan
+network.wan6.proto=dhcpv6
 EOF
 run
-ck "存在的 wan6 其 device 随迁到 wan1" "$(uci -q get network.wan6.device)" "wan1"
+ck "D2 旧 device 随迁到 wan1" "$(uci -q get network.wan6.device)" "wan1"
+ck "D2 proto 保留不动" "$(uci -q get network.wan6.proto)" "dhcpv6"
 
+# D3：wan6 已配置完整（例如用户改走 wan2）→ 不覆盖
 cat > "$CFG" <<'EOF'
 network.wan1=interface
 network.wan1.device=wan1
+network.wan6=interface
+network.wan6.device=wan2
+network.wan6.proto=dhcpv6
 EOF
 run
-ck "无 wan6 时不凭空创建" "$(uci -q get network.wan6)" ""
+ck "D3 已配置的 device 不被覆盖" "$(uci -q get network.wan6.device)" "wan2"
+
+# D4：proto=none（991 造出的空壳特征）→ 补成 dhcpv6
+cat > "$CFG" <<'EOF'
+network.wan1=interface
+network.wan1.device=wan1
+network.wan6=interface
+network.wan6.device=wan1
+network.wan6.proto=none
+EOF
+run
+ck "D4 proto=none 补为 dhcpv6" "$(uci -q get network.wan6.proto)" "dhcpv6"
 
 echo ""
 if [ "$FAILED" -eq 0 ]; then
